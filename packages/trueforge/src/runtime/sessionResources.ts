@@ -1,0 +1,364 @@
+import type { AgentSpec, SessionHandle } from '@truefoundry/trueforge-core/agent-session';
+import {
+  Sandbox,
+  SkillMounter,
+  type AgentDefinition,
+  type AgentTracing,
+  type ModelParams,
+  type RemoteMcpHeaders,
+  type SandboxProvider,
+  type Skill,
+  type VercelAIProviderConfig,
+} from '@truefoundry/trueforge-core/core';
+import { HTTPException } from 'hono/http-exception';
+import { join } from 'node:path';
+import type { Logger } from 'winston';
+import { z } from 'zod';
+import configuration from '../config';
+import type { IMcpServerStore, IMcpServerWithAuthStore } from '../db/mcpServerStore';
+import type { IModelProviderStore } from '../db/modelProviderStore';
+import type { ISandboxProviderStore } from '../db/sandboxProviderStore';
+import type { ISkillStore } from '../db/skillStore';
+import { LocalSandboxProvider } from '../sandbox/local/provider/LocalSandboxProvider';
+import { getCachedLocalSandboxSupport, isLocalSandboxFallbackEnabled } from '../sandbox/localRuntime';
+import { toSandboxProviderFromRecord } from '../sandbox/providerUtils';
+import type { ReasoningEffort } from '../schemas/modelProvider';
+import { resolveWebSearchProvider } from '../websearch/providers';
+
+export interface McpConnection {
+  url: string;
+  headers: RemoteMcpHeaders;
+}
+
+/** Gateway header carrying stringified JSON metadata. */
+export const X_TFY_METADATA = 'x-tfy-metadata';
+
+/** Prefix for harness-owned keys */
+export const TFG_METADATA_PREFIX = 'tfg';
+
+const GatewayMetadataSchema = z.record(z.string().min(1), z.string());
+
+/**
+ * Parse inbound `x-tfy-metadata`. Rejects malformed values rather than dropping them.
+ */
+export function parseGatewayMetadataHeader(raw: string): Record<string, string> {
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(raw);
+  } catch (error) {
+    throw new HTTPException(400, { message: `${X_TFY_METADATA} must be a JSON object`, cause: error });
+  }
+  const parsed = GatewayMetadataSchema.safeParse(decoded);
+  if (!parsed.success) {
+    throw new HTTPException(400, {
+      message: `${X_TFY_METADATA} must be a JSON object of string values`,
+    });
+  }
+  return parsed.data;
+}
+
+export function buildGatewayMetadata(input: { session: SessionHandle; turnId: string }): Record<string, string> {
+  // Session.metadata is intentionally omitted for now (Unicode-in-header risk); re-add later.
+  const metadata: Record<string, string> = {
+    [`${TFG_METADATA_PREFIX}.session_id`]: input.session.session_id,
+    [`${TFG_METADATA_PREFIX}.turn_id`]: input.turnId,
+  };
+  const { agent } = input.session;
+  if (agent.type === 'reference') {
+    metadata[`${TFG_METADATA_PREFIX}.agent_id`] = agent.id;
+    if (agent.name !== null) {
+      metadata[`${TFG_METADATA_PREFIX}.agent_name`] = agent.name;
+    }
+  }
+  return metadata;
+}
+
+/** Inbound x-tfy-metadata first; harness tfg.* always win */
+export function mergeGatewayMetadata(input: {
+  session: SessionHandle;
+  turnId: string;
+  tfyMetadata?: Record<string, string> | undefined;
+}): Record<string, string> {
+  return {
+    ...input.tfyMetadata,
+    ...buildGatewayMetadata({ session: input.session, turnId: input.turnId }),
+  };
+}
+
+export function gatewayMetadataHeaders(metadata: Record<string, string>): Record<string, string> {
+  if (Object.keys(metadata).length === 0) {
+    return {};
+  }
+  return { [X_TFY_METADATA]: JSON.stringify(metadata) };
+}
+
+/**
+ * Merge gateway metadata into MCP invoke headers. Preserves authRequired;
+ * metadata is applied after auth/per-server headers.
+ */
+export function withGatewayMetadataHeaders(input: {
+  headers: RemoteMcpHeaders;
+  metadataHeaders: Record<string, string>;
+}): RemoteMcpHeaders {
+  const { headers, metadataHeaders } = input;
+  if (Object.keys(metadataHeaders).length === 0) {
+    return headers;
+  }
+  if (typeof headers !== 'function') {
+    return { ...headers, ...metadataHeaders };
+  }
+  return async () => {
+    const result = await headers();
+    if ('authRequired' in result) {
+      return result;
+    }
+    return { headers: { ...result.headers, ...metadataHeaders } };
+  };
+}
+
+/** Split `provider/model` FQN. Returns undefined when the shape is not exactly one slash. */
+export function parseModelFqn(name: string): { providerName: string; modelName: string } | undefined {
+  const slash = name.indexOf('/');
+  if (slash <= 0 || slash === name.length - 1) {
+    return undefined;
+  }
+  if (name.includes('/', slash + 1)) {
+    return undefined;
+  }
+  return { providerName: name.slice(0, slash), modelName: name.slice(slash + 1) };
+}
+
+/**
+ * Load turn-ready model config and defaults for a configured FQN (`provider/model`).
+ * Malformed FQN or missing provider/model → HTTPException(422).
+ */
+
+export async function getModelDetails({
+  tenant_id,
+  name,
+  store,
+}: {
+  tenant_id: string;
+  name: string;
+  store: IModelProviderStore;
+}): Promise<{
+  providerConfig: VercelAIProviderConfig;
+  defaultModelParams: ModelParams;
+  modelProperties: AgentDefinition['modelProperties'];
+  reasoningEfforts: ReasoningEffort[] | undefined;
+}> {
+  const parsed = parseModelFqn(name);
+  if (parsed === undefined) {
+    throw new HTTPException(422, {
+      message: `Model name must be a fully qualified "provider/model": ${name}`,
+    });
+  }
+  const provider = await store.getProvider({
+    tenant_id,
+    name: parsed.providerName,
+    model_name: parsed.modelName,
+  });
+  if (provider === undefined) {
+    throw new HTTPException(422, {
+      message: `Unknown model "${name}" — provider not configured`,
+    });
+  }
+  const model = provider.manifest.models.find(entry => entry.name === parsed.modelName);
+  if (model === undefined) {
+    throw new HTTPException(422, {
+      message: `Unknown model "${name}" — not configured on provider`,
+    });
+  }
+  // Provider types are adapter names, so this assignment is what keeps them so: a type with no
+  // `buildLanguageModel` case fails to compile here.
+  const { type, base_url: baseUrl } = provider.manifest;
+  return {
+    providerConfig: {
+      provider: { type, name: provider.name },
+      model: { id: model.model_id, name: model.name },
+      name,
+      baseUrl,
+      apiKey: provider.manifest.auth?.api_key ?? '',
+      headers: {},
+    },
+    defaultModelParams: model.properties.max_output_tokens ? { max_tokens: model.properties.max_output_tokens } : {},
+    modelProperties: { contextLength: model.properties.context_length },
+    reasoningEfforts: model.properties.reasoning_efforts,
+  };
+}
+
+/**
+ * Load MCP url + headers for a configured server. Returns undefined when unregistered.
+ *
+ * TODO: OAuth header resolvers re-run on every RemoteMCP listTools/callTool; cache or gate later.
+ */
+export async function getMcpConnection({
+  tenant_id,
+  name,
+  store,
+  userRef,
+}: {
+  tenant_id: string;
+  name: string;
+  store: IMcpServerWithAuthStore;
+  userRef: string;
+}): Promise<McpConnection | undefined> {
+  const record = await store.getServer({ tenant_id, name });
+  if (record === undefined) {
+    return undefined;
+  }
+  return {
+    url: record.manifest.url,
+    headers: store.resolveInvokeHeaders({ record, userRef }),
+  };
+}
+
+/**
+ * Build a runtime SandboxProvider from the configured store row, or the
+ * in-memory local fallback when standalone + the cached probe is supported.
+ * Builds a fresh provider client per call (no network I/O).
+ */
+/** Single path segment under the sandboxes parent (`_` when sessionId is missing or unsafe). */
+export function localSandboxSessionSegment(sessionId: string | undefined): string {
+  if (sessionId === undefined || sessionId.length === 0 || sessionId.includes('/') || sessionId.includes('..')) {
+    return '_';
+  }
+  return sessionId;
+}
+
+export async function resolveSandboxProvider({
+  tenant_id,
+  store,
+  logger,
+  sessionId,
+}: {
+  tenant_id: string;
+  store: ISandboxProviderStore;
+  logger: Logger;
+  sessionId: string;
+}): Promise<SandboxProvider | undefined> {
+  const record = await store.getSandboxProvider(tenant_id);
+  if (record !== undefined) {
+    return toSandboxProviderFromRecord({ record, tenant_id, logger });
+  }
+  if (!configuration.STANDALONE) {
+    return undefined;
+  }
+  const support = getCachedLocalSandboxSupport();
+  if (support?.supported !== true) {
+    return undefined;
+  }
+  return new LocalSandboxProvider({
+    sandboxRootPathParent: join(configuration.LOCAL_SANDBOX_ROOT_PARENT, localSandboxSessionSegment(sessionId)),
+    codeModeSocketParentPath: configuration.CODE_MODE_SOCKET_PARENT,
+    support,
+    fileMaxBytesForDownload: configuration.SANDBOX_FILE_MAX_BYTES_FOR_DOWNLOAD,
+    logger,
+  });
+}
+
+/**
+ * Builds a Sandbox for one turn from a resolved provider and skill mounts.
+ */
+export function buildTurnSandbox(input: {
+  provider: SandboxProvider;
+  logger: Logger;
+  skills?: readonly Skill[];
+  fileDownloadEnabled: boolean;
+  existingSandboxId?: string | undefined;
+  tracing: AgentTracing;
+}): Sandbox {
+  // Empty mounter still uploads requested-skills file so existing skills are cleaned up.
+  return new Sandbox({
+    provider: input.provider,
+    existingSandboxId: input.existingSandboxId,
+    fileDownloadEnabled: input.fileDownloadEnabled,
+    blockDestructiveToolsInCodeMode: true,
+    mcpRequestTimeoutMs: configuration.MCP_REQUEST_TIMEOUT_MS,
+    mcpConnectTimeoutMs: configuration.MCP_CONNECT_TIMEOUT_MS,
+    skillMounter: new SkillMounter({ skills: input.skills ?? [] }),
+    tracing: input.tracing,
+    logger: input.logger,
+  });
+}
+
+/**
+ * Cross-checks an AgentSpec against configured models / MCP / skills and
+ * sandbox capability. Throws HTTPException(422) for semantic failures.
+ * Skills must exist in the skill store (git name) or pass SFY resolve (registry FQN).
+ */
+export async function validateAgentSpec({
+  spec,
+  tenant_id,
+  modelProviderStore,
+  mcpServerStore,
+  skillStore,
+  sandboxProviderStore,
+}: {
+  spec: AgentSpec;
+  tenant_id: string;
+  modelProviderStore: IModelProviderStore;
+  mcpServerStore: IMcpServerStore;
+  skillStore: ISkillStore;
+  sandboxProviderStore: ISandboxProviderStore;
+}): Promise<void> {
+  const resolved = await getModelDetails({
+    tenant_id,
+    name: spec.model.name,
+    store: modelProviderStore,
+  });
+  const reasoningEffort = spec.model.params?.reasoning_effort;
+  if (reasoningEffort !== undefined) {
+    const efforts = resolved.reasoningEfforts;
+    if (!efforts?.some(effort => effort === reasoningEffort)) {
+      throw new HTTPException(422, {
+        message: efforts
+          ? `Reasoning effort "${reasoningEffort}" is not supported by model "${spec.model.name}"`
+          : `Model "${spec.model.name}" does not support configurable reasoning effort`,
+      });
+    }
+  }
+
+  const requestedMcpServers = spec.mcp_servers ?? [];
+  if (requestedMcpServers.length > 0) {
+    const names = requestedMcpServers.map(server => server.name);
+    const configuredNames = new Set(
+      (
+        await mcpServerStore.listServers({
+          tenant_id,
+          names,
+        })
+      ).map(record => record.name),
+    );
+    const unknown = requestedMcpServers.find(server => !configuredNames.has(server.name));
+    if (unknown !== undefined) {
+      throw new HTTPException(422, {
+        message: `Unknown MCP server "${unknown.name}" — not configured`,
+      });
+    }
+  }
+
+  const requestedSkills = spec.skills ?? [];
+  if (requestedSkills.length > 0) {
+    await skillStore.validateAgentSkills({ tenant_id, skills: requestedSkills });
+  }
+
+  const wantsSandbox = spec.config.sandbox.enabled;
+  const hasSkills = requestedSkills.length > 0;
+  if (wantsSandbox || hasSkills) {
+    const record = await sandboxProviderStore.getSandboxProvider(tenant_id);
+    if (record === undefined && !isLocalSandboxFallbackEnabled()) {
+      throw new HTTPException(422, {
+        message: hasSkills
+          ? 'skills require a sandbox provider — configure via PUT /settings/sandbox-providers'
+          : 'sandbox is enabled but no sandbox provider is configured — PUT /settings/sandbox-providers',
+      });
+    }
+  }
+
+  if (spec.config.web_search.enabled && resolveWebSearchProvider() === undefined) {
+    throw new HTTPException(422, {
+      message: 'web_search is enabled but no web-search provider is configured',
+    });
+  }
+}

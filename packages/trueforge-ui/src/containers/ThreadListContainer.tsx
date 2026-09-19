@@ -1,0 +1,430 @@
+'use client';
+
+import {
+  ThreadListItemByIndexProvider,
+  ThreadListItemMorePrimitive,
+  ThreadListItemPrimitive,
+  ThreadListPrimitive,
+  useAui,
+  useAuiState,
+} from '@assistant-ui/react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type Ref } from 'react';
+
+import { AgentHistoryFilterButton } from '../atoms/AgentHistoryFilterButton.js';
+import { auiButtonClass } from '../atoms/lib/buttonClasses.js';
+import { cn } from '../atoms/lib/cn.js';
+import { useCompactLayout } from '../atoms/lib/CompactLayoutContext.js';
+import {
+  canReuseMutableShell,
+  readThreadAgentName,
+  threadListIndicesByRecency,
+  threadListItemIsMutable,
+} from '../atoms/lib/threadListMeta.js';
+import { useIsMobile } from '../atoms/lib/useIsMobile.js';
+import { BottomSheet } from '../atoms/primitives/BottomSheet.js';
+import { useResourcePermissions } from '../hooks/useResourcePermissions.js';
+import { Icon } from '../icons/Icon.js';
+import { useOptionalServer } from '../server/ServerContext.js';
+import { useOptionalShellMode } from '../server/ShellModeContext.js';
+import { useSlot } from '../theme/SlotsProvider.js';
+
+/**
+ * Simplified relative to the reference: renders threads in a single flat list
+ * rather than grouping them by Today/Yesterday/Earlier.
+ *
+ * Delete uses assistant-ui ThreadListItemPrimitive.Delete / ThreadListItemMorePrimitive
+ * (adapter.delete → server.deleteSession). Mobile/compact keeps a BottomSheet chrome.
+ */
+export type ThreadListContainerProps = {
+  /** Called after New chat or selecting a row — used by stack/drawer chrome. */
+  onThreadOpen?: () => void;
+  /** `recent-history` hides navigation and lists only persisted sessions. */
+  variant?: 'default' | 'recent-history';
+};
+
+const deleteItemClass =
+  'flex w-full cursor-pointer select-none items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-failure-bg outline-none transition-colors hover:bg-failure-bg/12 hover:text-failure-bg focus:bg-failure-bg/12 focus:text-failure-bg data-[highlighted]:bg-failure-bg/12 data-[highlighted]:text-failure-bg';
+
+function ThreadListItemDeleteMenu({ disabled }: { disabled: boolean }) {
+  const PermissionGuard = useSlot('PermissionGuard');
+  const compact = useCompactLayout();
+  const isMobile = useIsMobile();
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [portalContainer, setPortalContainer] = useState<HTMLElement>();
+  const useSheet = isMobile || compact;
+  const setTriggerElement = useCallback((element: HTMLButtonElement | null) => {
+    const themeRoot = element?.closest('.aui-theme-root');
+    setPortalContainer(themeRoot instanceof HTMLElement ? themeRoot : undefined);
+  }, []);
+
+  const moreButtonClass = auiButtonClass({
+    variant: 'ghost',
+    size: 'icon',
+    className: 'size-7 shrink-0 text-text-secondary hover:bg-transparent hover:text-text-primary',
+  });
+
+  if (useSheet) {
+    return (
+      <>
+        <button
+          type="button"
+          aria-label="Session actions"
+          title="Session actions"
+          aria-haspopup="dialog"
+          aria-expanded={sheetOpen}
+          className={moreButtonClass}
+          onClick={() => setSheetOpen(true)}
+        >
+          <Icon name="ellipsis" className="size-3.5" />
+        </button>
+        {sheetOpen ? (
+          <BottomSheet open onOpenChange={setSheetOpen} aria-label="Session actions">
+            <div className="flex flex-col gap-1 p-2 *:w-full" role="menu">
+              <PermissionGuard allowed={!disabled}>
+                <ThreadListItemPrimitive.Delete
+                  className={deleteItemClass}
+                  onClick={() => {
+                    if (!disabled) setSheetOpen(false);
+                  }}
+                >
+                  <Icon name="trash" className="size-3.5" />
+                  Delete
+                </ThreadListItemPrimitive.Delete>
+              </PermissionGuard>
+            </div>
+          </BottomSheet>
+        ) : null}
+      </>
+    );
+  }
+
+  return (
+    <ThreadListItemMorePrimitive.Root sharedFocusGroup>
+      <ThreadListItemMorePrimitive.Trigger
+        ref={setTriggerElement}
+        aria-label="Session actions"
+        title="Session actions"
+        className={moreButtonClass}
+      >
+        <Icon name="ellipsis" className="size-3.5" />
+      </ThreadListItemMorePrimitive.Trigger>
+      <ThreadListItemMorePrimitive.Content
+        portalProps={{ container: portalContainer }}
+        align="end"
+        sideOffset={4}
+        className="aui-popup-enter font-sans-flex z-50 min-w-[8rem] rounded-md border border-border bg-card-bg p-1 text-text-primary shadow-md *:w-full"
+      >
+        <PermissionGuard allowed={!disabled}>
+          <ThreadListItemPrimitive.Delete className={deleteItemClass}>
+            <Icon name="trash" className="size-3.5" />
+            Delete
+          </ThreadListItemPrimitive.Delete>
+        </PermissionGuard>
+      </ThreadListItemMorePrimitive.Content>
+    </ThreadListItemMorePrimitive.Root>
+  );
+}
+
+function ThreadListItemRow({
+  onThreadOpen,
+  canDeleteSession,
+  canDeleteResource,
+}: {
+  onThreadOpen?: () => void;
+  canDeleteSession: boolean;
+  canDeleteResource: (sessionId: string) => boolean;
+}) {
+  const aui = useAui();
+  const shell = useOptionalShellMode();
+  const ThreadListRow = useSlot('ThreadListRow');
+  const id = useAuiState(s => s.threadListItem.id);
+  const remoteId = useAuiState(s => s.threadListItem.remoteId);
+  const title = useAuiState(s => s.threadListItem.title);
+  const lastMessageAt = useAuiState(s => s.threadListItem.lastMessageAt);
+  const custom = useAuiState(s => s.threadListItem.custom);
+  const mainThreadId = useAuiState(s => s.threads.mainThreadId);
+  const agentName = readThreadAgentName(custom);
+  const showDelete = canDeleteSession && remoteId != null;
+  const deleteDisabled = remoteId != null && !canDeleteResource(remoteId);
+  const sidebarNavOpen = shell?.libraryOpen === true || shell?.sessionsOpen === true || shell?.schedulesOpen === true;
+
+  return (
+    <ThreadListItemPrimitive.Root className="min-w-0">
+      <ThreadListRow
+        title={title ?? 'New Chat'}
+        active={id === mainThreadId && !sidebarNavOpen}
+        agentName={agentName}
+        lastMessageAt={lastMessageAt}
+        onSelect={() => {
+          onThreadOpen?.();
+          shell?.setSettingsOpen(false);
+          shell?.setLibraryOpen(false);
+          shell?.setSessionsOpen(false);
+          shell?.setSchedulesOpen(false);
+
+          // Prefer custom.isMutable (session wire); agentName-only is a legacy fallback.
+          const sessionMutable = threadListItemIsMutable(custom);
+          const sameImmutable =
+            !sessionMutable &&
+            shell?.mode.status === 'active' &&
+            !shell.mode.isMutable &&
+            (agentName == null
+              ? shell.mode.agentName == null && shell.mode.agentId == null
+              : shell.mode.agentName === agentName || shell.mode.agentId === agentName);
+          const sameMutable = canReuseMutableShell({
+            sessionMutable,
+            shellMutable: shell?.mode.status === 'active' && shell.mode.isMutable,
+            ...(shell?.mode.status === 'active' && shell.mode.isMutable
+              ? { shellAgentName: shell.mode.agentName, shellAgentId: shell.mode.agentId }
+              : {}),
+            remoteId,
+            pendingSessionId: shell?.pendingSessionId,
+          });
+
+          if ((sameImmutable || sameMutable) && remoteId != null) {
+            void Promise.resolve(aui.threads().switchToThread(id)).catch(() => undefined);
+            return;
+          }
+          if (remoteId != null) {
+            shell?.openHistorySession({
+              sessionId: remoteId,
+              isMutable: sessionMutable,
+              ...(agentName != null ? { agentName } : {}),
+            });
+            return;
+          }
+          void Promise.resolve(aui.threads().switchToThread(id)).catch(() => undefined);
+        }}
+        actions={showDelete ? <ThreadListItemDeleteMenu disabled={deleteDisabled} /> : undefined}
+      />
+    </ThreadListItemPrimitive.Root>
+  );
+}
+
+function useThreadListIndicesByRecency(variant: NonNullable<ThreadListContainerProps['variant']>): number[] {
+  const threadIds = useAuiState(s => s.threads.threadIds);
+  const threadItems = useAuiState(s => s.threads.threadItems);
+
+  return useMemo(() => {
+    const indices = threadListIndicesByRecency({ threadIds, threadItems });
+    if (variant === 'default') return indices;
+
+    const itemById = new Map<string, (typeof threadItems)[number]>();
+    for (const item of threadItems) {
+      itemById.set(item.id, item);
+      if (item.remoteId != null) itemById.set(item.remoteId, item);
+    }
+
+    return indices.filter(index => {
+      const id = threadIds[index];
+      if (id === undefined) return false;
+      const item = itemById.get(id);
+      return item?.remoteId != null;
+    });
+  }, [threadIds, threadItems, variant]);
+}
+
+function ThreadListItemsByRecency({
+  indices,
+  onThreadOpen,
+  canDeleteSession,
+  canDeleteResource,
+}: {
+  indices: number[];
+  onThreadOpen?: () => void;
+  canDeleteSession: boolean;
+  canDeleteResource: (sessionId: string) => boolean;
+}) {
+  // Newest-first: remount/switchToThread can append the active session to threadIds.
+  const threadIds = useAuiState(s => s.threads.threadIds);
+
+  return (
+    <>
+      {indices.map(index => {
+        const key = threadIds[index] ?? String(index);
+        return (
+          <ThreadListItemByIndexProvider key={key} index={index} archived={false}>
+            <ThreadListItemRow
+              onThreadOpen={onThreadOpen}
+              canDeleteSession={canDeleteSession}
+              canDeleteResource={canDeleteResource}
+            />
+          </ThreadListItemByIndexProvider>
+        );
+      })}
+    </>
+  );
+}
+
+const THREAD_LIST_VIEWPORT_SLOT = 'aui_thread-list-viewport';
+/** How close to the bottom (px) before the next sessions page is fetched. */
+const LOAD_MORE_BOTTOM_PX = 80;
+
+function RecentChatsSection({
+  children,
+  viewportRef,
+  hideScrollbar,
+}: {
+  children: ReactNode;
+  viewportRef: Ref<HTMLDivElement>;
+  hideScrollbar: boolean;
+}) {
+  const shell = useOptionalShellMode();
+  const activeRemoteId = useAuiState(s => s.threadListItem.remoteId);
+  const historyFilterIntent = shell?.historyAgentFilter?.intent;
+  const showFilter =
+    shell?.isLibraryEnabled === true &&
+    historyFilterIntent !== 'try-agent' &&
+    (historyFilterIntent === 'history' ||
+      shell.mode.status !== 'active' ||
+      shell.mode.isMutable ||
+      shell.pendingSessionId != null ||
+      activeRemoteId != null);
+  const heading =
+    shell?.historyAgentFilter == null ? 'Chat History' : `Chats for ${shell.historyAgentFilter.agentName}`;
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex shrink-0 items-center gap-1 px-1 py-1">
+        <h2 className="min-w-0 flex-1 truncate px-1.5 py-1 text-sm font-medium text-text-secondary">{heading}</h2>
+        {showFilter ? <AgentHistoryFilterButton /> : null}
+      </div>
+      <div
+        ref={viewportRef}
+        data-slot={THREAD_LIST_VIEWPORT_SLOT}
+        className={cn('flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto', hideScrollbar && 'aui-scrollbar-hidden')}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
+export function ThreadListContainer({ onThreadOpen, variant = 'default' }: ThreadListContainerProps = {}) {
+  const aui = useAui();
+  const server = useOptionalServer();
+  const isLoading = useAuiState(s => s.threads.isLoading);
+  const isLoadingMore = useAuiState(s => s.threads.isLoadingMore);
+  const hasMore = useAuiState(s => s.threads.hasMore);
+  const threadIds = useAuiState(s => s.threads.threadIds);
+  const threadItems = useAuiState(s => s.threads.threadItems);
+  const shell = useOptionalShellMode();
+
+  const ThreadListShell = useSlot('ThreadListShell');
+  const ThreadListNewButton = useSlot('ThreadListNewButton');
+  const AgentsLibraryButton = useSlot('AgentsLibraryButton');
+  const SessionsBrowserButton = useSlot('SessionsBrowserButton');
+  const SchedulesButton = useSlot('SchedulesButton');
+  const ThreadListRowSkeleton = useSlot('ThreadListRowSkeleton');
+  const ThreadListEmptyState = useSlot('ThreadListEmptyState');
+
+  const indices = useThreadListIndicesByRecency(variant);
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const hasMoreRef = useRef(hasMore);
+  const auiRef = useRef(aui);
+  hasMoreRef.current = hasMore;
+  auiRef.current = aui;
+
+  const showNewChat = shell?.isNewChatEnabled !== false;
+  const isIdle = shell?.mode.status === 'idle';
+  const isRecentHistory = variant === 'recent-history';
+  const canDeleteSession = typeof server?.deleteSession === 'function';
+  const remoteSessionIds = useMemo(
+    () => threadItems.flatMap(item => (item.remoteId == null ? [] : [item.remoteId])),
+    [threadItems],
+  );
+  const { allows } = useResourcePermissions({ resourceType: 'session', resourceIds: remoteSessionIds });
+
+  // Fill an underflowing viewport; once it scrolls, paginate only near the bottom.
+  // Re-measure after commit (threadIds / hasMore) instead of rAF-chaining, which
+  // raced layout and could drain every remaining listSessions page.
+  // The runtime owns request deduplication, so Strict Mode remounts can recheck safely.
+  useEffect(() => {
+    if (isIdle || isLoading || isLoadingMore) return;
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+
+    let cancelled = false;
+
+    const tryLoadMore = () => {
+      if (cancelled || !hasMoreRef.current) return;
+      if (viewport.clientHeight <= 0) return;
+
+      const remaining = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+      if (viewport.scrollHeight > viewport.clientHeight && remaining > LOAD_MORE_BOTTOM_PX) return;
+
+      void auiRef.current.threads().loadMore();
+    };
+
+    viewport.addEventListener('scroll', tryLoadMore, { passive: true });
+    const resizeObserver = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(() => tryLoadMore());
+    if (resizeObserver) {
+      resizeObserver.observe(viewport);
+    } else {
+      window.addEventListener('resize', tryLoadMore);
+    }
+    tryLoadMore();
+
+    return () => {
+      cancelled = true;
+      viewport.removeEventListener('scroll', tryLoadMore);
+      resizeObserver?.disconnect();
+      if (!resizeObserver) {
+        window.removeEventListener('resize', tryLoadMore);
+      }
+    };
+  }, [hasMore, isIdle, isLoading, isLoadingMore, threadIds.length]);
+
+  const handleNewChat = () => {
+    onThreadOpen?.();
+    shell?.setLibraryOpen(false);
+    shell?.setSessionsOpen(false);
+    if (shell?.isComposerEnabled) {
+      shell.openDraft();
+      return;
+    }
+    shell?.setSettingsOpen(false);
+    shell?.setSchedulesOpen(false);
+    void Promise.resolve(aui.threads().switchToNewThread()).catch(() => undefined);
+  };
+
+  let listBody: ReactNode;
+  if (isIdle) {
+    listBody = <ThreadListEmptyState message={isRecentHistory ? 'No recent chats' : undefined} />;
+  } else if (isLoading) {
+    listBody = <ThreadListRowSkeleton />;
+  } else if (indices.length === 0) {
+    listBody = <ThreadListEmptyState message={isRecentHistory ? 'No recent chats' : undefined} />;
+  } else {
+    listBody = (
+      <ThreadListPrimitive.Root className="flex min-h-0 flex-col gap-0.5">
+        <ThreadListItemsByRecency
+          indices={indices}
+          onThreadOpen={onThreadOpen}
+          canDeleteSession={canDeleteSession}
+          canDeleteResource={sessionId => allows(sessionId, 'DELETE')}
+        />
+      </ThreadListPrimitive.Root>
+    );
+  }
+
+  return (
+    <ThreadListShell
+      header={
+        isRecentHistory ? null : (
+          <div className="flex flex-col gap-1">
+            {showNewChat ? <ThreadListNewButton onClick={handleNewChat} /> : null}
+            <AgentsLibraryButton />
+            <SessionsBrowserButton />
+            <SchedulesButton />
+          </div>
+        )
+      }
+    >
+      <RecentChatsSection viewportRef={viewportRef} hideScrollbar={isRecentHistory}>
+        {listBody}
+        {!isIdle && hasMore ? <div className="h-4 shrink-0" aria-hidden /> : null}
+      </RecentChatsSection>
+    </ThreadListShell>
+  );
+}
