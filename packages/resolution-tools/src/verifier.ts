@@ -10,6 +10,7 @@ import { isAllowedChange } from './worktree.js';
 
 const ACCEPTANCE_DIRECTORY = join('packages', 'resolution-tools', 'test', 'acceptance');
 const ACCEPTANCE_SCRIPT = join(ACCEPTANCE_DIRECTORY, 'invoice.acceptance.ts');
+const TSX_LOADER = join('packages', 'resolution-tools', 'node_modules', 'tsx', 'dist', 'loader.mjs');
 
 async function filesBelow(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -67,10 +68,11 @@ export class IndependentVerifier {
       isAllowedChange({ allowedScope: job.allowed_scope, changedFile }),
     );
     const acceptanceScript = join(job.repository_path, ACCEPTANCE_SCRIPT);
+    const tsxLoader = join(job.repository_path, TSX_LOADER);
     const scenario = scenarioForIssue(job.issue);
     const acceptance = await runProcess({
       command: process.execPath,
-      args: ['--import', 'tsx', acceptanceScript, job.worktree_path, scenario],
+      args: ['--import', tsxLoader, acceptanceScript, job.worktree_path, scenario],
       cwd: job.repository_path,
       timeoutMs: this.config.commandTimeoutMs,
     });
@@ -99,7 +101,7 @@ export class IndependentVerifier {
       },
       command_results: [
         {
-          command: [process.execPath, '--import', 'tsx', acceptanceScript, job.worktree_path, scenario],
+          command: [process.execPath, '--import', tsxLoader, acceptanceScript, job.worktree_path, scenario],
           exit_code: acceptance.exitCode,
           output_path: outputPath,
         },
