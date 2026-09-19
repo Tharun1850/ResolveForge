@@ -131,7 +131,7 @@ export class IndependentVerifier {
       .split('\0')
       .map(entry => entry.slice(3))
       .filter(Boolean);
-    return { changedFiles, fingerprint: hashText(status.output) };
+    return { changedFiles, fingerprint: hashText(`${status.output}\0${await this.patchText(job)}`) };
   }
 
   private async runAcceptance(input: {
