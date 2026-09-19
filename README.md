@@ -1,2 +1,2 @@
-# TrueCode
+# ResolveForge
 TrueFoundry hackathon
