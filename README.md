@@ -13,7 +13,7 @@ pnpm install --frozen-lockfile
 pnpm resolveforge:demo
 ```
 
-In another terminal, start the MCP service. Set the target repository to this checkout so that `start_fix` cannot receive another repository path.
+In another terminal, start the MCP service. Set the target repository to this checkout. `start_fix` always uses this configured repository, so neither the agent nor the human needs to provide a path during approval.
 
 ```sh
 export RESOLVEFORGE_TARGET_REPO="$PWD"

@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 import type { ResolveForgeService } from './service.js';
-import { CaseIdSchema, DiagnosticRouteSchema, JobIdSchema } from './types.js';
+import { CaseIdSchema, DiagnosticRouteSchema, JobIdSchema, StartFixInputSchema } from './types.js';
 
 interface ToolResult {
   [key: string]: unknown;
@@ -64,12 +64,9 @@ export function createResolveForgeMcpServer(service: ResolveForgeService): McpSe
   server.registerTool(
     'start_fix',
     {
-      description: 'Create an isolated worktree and begin a bounded patch attempt after evidence is complete.',
-      inputSchema: {
-        case_id: CaseIdSchema,
-        repository_path: z.string().trim().min(1),
-        allowed_scope: z.string().trim().min(1).default('packages/resolveforge-demo/src'),
-      },
+      description:
+        'Create an isolated worktree in the server-configured target repository and begin a bounded patch attempt after evidence is complete.',
+      inputSchema: StartFixInputSchema.shape,
       annotations: { destructiveHint: true, idempotentHint: false },
     },
     input =>
@@ -77,7 +74,6 @@ export function createResolveForgeMcpServer(service: ResolveForgeService): McpSe
         service.startFix({
           allowedScope: input.allowed_scope,
           caseId: input.case_id,
-          repositoryPath: input.repository_path,
         }),
       ),
   );

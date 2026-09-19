@@ -1,5 +1,3 @@
-import { resolve } from 'node:path';
-
 import type { ResolveForgeConfig } from './config.js';
 import { EvidenceStore } from './evidence-store.js';
 import { DemoFixClient, JcodeFixClient, type FixClient } from './fix-client.js';
@@ -84,13 +82,13 @@ export class ResolveForgeService {
     return reactEvidence;
   }
 
-  async startFix(input: { allowedScope: string; caseId: CaseId; repositoryPath: string }) {
+  async startFix(input: { allowedScope: string; caseId: CaseId }) {
     if (input.allowedScope !== DEMO_ALLOWED_SCOPE) {
       throw new Error(`This MVP permits fixes only in ${DEMO_ALLOWED_SCOPE}.`);
     }
-    const repositoryPath = resolve(input.repositoryPath);
-    if (this.config.targetRepo && repositoryPath !== this.config.targetRepo) {
-      throw new Error('The requested repository does not match RESOLVEFORGE_TARGET_REPO.');
+    const repositoryPath = this.config.targetRepo;
+    if (!repositoryPath) {
+      throw new Error('RESOLVEFORGE_TARGET_REPO must be configured before a fix can start.');
     }
     const evidence = await this.evidenceStore.readEvidence(input.caseId);
     const gate = evaluateEvidenceGate(evidence);

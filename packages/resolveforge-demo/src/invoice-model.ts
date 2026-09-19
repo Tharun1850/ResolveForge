@@ -19,15 +19,11 @@ export function filterInvoices(status: InvoiceStatus | null): Invoice[] {
 }
 
 export function exportInvoices(status: InvoiceStatus | null): Invoice[] {
-  // Seeded defect. The export ignores an active filter until ResolveForge fixes it.
-  void status;
-  return invoices;
+  return status ? invoices.filter(invoice => invoice.status === status) : invoices;
 }
 
 export function displayedInvoices(visibleInvoices: Invoice[]): Invoice[] {
-  // Seeded defect. The table renders every invoice after the status filter changes.
-  void visibleInvoices;
-  return invoices;
+  return visibleInvoices;
 }
 
 export function calculateInvoiceTotal(input: { discount: number; subtotal: number; taxRate: number }): number {

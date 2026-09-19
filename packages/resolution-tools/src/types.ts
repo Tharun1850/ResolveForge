@@ -224,7 +224,6 @@ export const ReproduceIssueInputSchema = z
 export const StartFixInputSchema = z
   .object({
     case_id: CaseIdSchema,
-    repository_path: z.string().trim().min(1),
     allowed_scope: z.string().trim().min(1).default('packages/resolveforge-demo/src'),
   })
   .strict();

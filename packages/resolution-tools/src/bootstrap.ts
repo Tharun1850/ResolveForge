@@ -38,6 +38,7 @@ function resolveForgeManifest(model: string) {
     instructions: [
       'Use ResolveForge to triage, reproduce, and verify reported behavior before requesting a fix.',
       'Do not call start_fix until every relevant reproduction route has evidence and acceptance assertions.',
+      "start_fix always uses the MCP server's configured target repository. Never ask the human for a repository path.",
       'Ask for human approval before start_fix or cancel_fix. Do not merge, commit, push, or create a pull request.',
       'Call verify_fix and review_patch after every completed patch. Present the review decision and evidence to the human.',
     ].join(' '),
