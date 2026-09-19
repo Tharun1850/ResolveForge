@@ -9,12 +9,13 @@ const EnvironmentSchema = z
     RESOLVEFORGE_DATA_DIR: z.string().trim().min(1).default('.resolveforge'),
     RESOLVEFORGE_INTEGRATION_MODE: z.enum(['demo', 'live']).default('demo'),
     RESOLVEFORGE_MAX_PATCH_ATTEMPTS: z.coerce.number().int().min(1).max(2).default(2),
+    RESOLVEFORGE_MCP_URL: z.url().optional(),
     RESOLVEFORGE_PORT: z.coerce.number().int().min(1).max(65_535).default(8787),
     RESOLVEFORGE_TARGET_REPO: z.string().trim().min(1).optional(),
     RESOLVEFORGE_TRUEFORGE_URL: z.url().default('http://localhost:8790'),
     TYPESAFE_API_KEY: z.string().trim().min(1).optional(),
   })
-  .strict();
+  .passthrough();
 
 export type ResolveForgeConfig = {
   commandTimeoutMs: number;
@@ -22,6 +23,7 @@ export type ResolveForgeConfig = {
   dataDir: string;
   integrationMode: 'demo' | 'live';
   maxPatchAttempts: number;
+  mcpUrl: string;
   port: number;
   targetRepo: string | null;
   trueForgeUrl: string;
@@ -36,6 +38,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): ResolveForgeCo
     dataDir: resolve(parsed.RESOLVEFORGE_DATA_DIR),
     integrationMode: parsed.RESOLVEFORGE_INTEGRATION_MODE,
     maxPatchAttempts: parsed.RESOLVEFORGE_MAX_PATCH_ATTEMPTS,
+    mcpUrl: parsed.RESOLVEFORGE_MCP_URL ?? `http://127.0.0.1:${String(parsed.RESOLVEFORGE_PORT)}/mcp`,
     port: parsed.RESOLVEFORGE_PORT,
     targetRepo: parsed.RESOLVEFORGE_TARGET_REPO ? resolve(parsed.RESOLVEFORGE_TARGET_REPO) : null,
     trueForgeUrl: parsed.RESOLVEFORGE_TRUEFORGE_URL,

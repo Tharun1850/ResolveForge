@@ -20,6 +20,7 @@ export function filterInvoices(status: InvoiceStatus | null): Invoice[] {
 
 export function exportInvoices(status: InvoiceStatus | null): Invoice[] {
   // Seeded defect. The export ignores an active filter until ResolveForge fixes it.
+  void status;
   return invoices;
 }
 

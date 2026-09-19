@@ -39,6 +39,25 @@ export const TriageResultSchema = z
 
 export type TriageResult = z.infer<typeof TriageResultSchema>;
 
+export const TriageResponseSchema = z
+  .object({
+    case_id: CaseIdSchema,
+    triage: TriageResultSchema,
+  })
+  .strict();
+
+export type TriageResponse = z.infer<typeof TriageResponseSchema>;
+
+export const CaseRecordSchema = z
+  .object({
+    case_id: CaseIdSchema,
+    issue: z.string().min(1),
+    triage: TriageResultSchema,
+  })
+  .strict();
+
+export type CaseRecord = z.infer<typeof CaseRecordSchema>;
+
 export const AssertionSchema = z
   .object({
     name: z.string().min(1),

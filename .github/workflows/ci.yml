@@ -66,6 +66,18 @@ jobs:
               - 'pnpm-workspace.yaml'
               - 'tsconfig.base.json'
               - '.github/workflows/ci.yml'
+            resolution-tools:
+              - 'packages/resolution-tools/**'
+              - 'package.json'
+              - 'pnpm-workspace.yaml'
+              - 'tsconfig.base.json'
+              - '.github/workflows/ci.yml'
+            resolveforge-demo:
+              - 'packages/resolveforge-demo/**'
+              - 'package.json'
+              - 'pnpm-workspace.yaml'
+              - 'tsconfig.base.json'
+              - '.github/workflows/ci.yml'
             store:
               - 'packages/trueforge/src/db/**'
               - 'packages/trueforge/tests/db/**'
@@ -96,6 +108,8 @@ jobs:
           TRUEFORGE: ${{ steps.filter.outputs.trueforge }}
           FRONTEND: ${{ steps.filter.outputs.frontend }}
           TRUEFORGE_UI: ${{ steps.filter.outputs['trueforge-ui'] }}
+          RESOLUTION_TOOLS: ${{ steps.filter.outputs['resolution-tools'] }}
+          RESOLVEFORGE_DEMO: ${{ steps.filter.outputs['resolveforge-demo'] }}
         run: |
           node <<'EOF' >> "$GITHUB_OUTPUT"
           const changedPackages = [];
@@ -103,6 +117,8 @@ jobs:
           if (process.env.TRUEFORGE === 'true') changedPackages.push('trueforge');
           if (process.env.FRONTEND === 'true') changedPackages.push('frontend');
           if (process.env.TRUEFORGE_UI === 'true') changedPackages.push('trueforge-ui');
+          if (process.env.RESOLUTION_TOOLS === 'true') changedPackages.push('resolution-tools');
+          if (process.env.RESOLVEFORGE_DEMO === 'true') changedPackages.push('resolveforge-demo');
           console.log(`list=${JSON.stringify(changedPackages)}`);
           EOF
 

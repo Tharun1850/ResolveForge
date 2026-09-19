@@ -2,7 +2,45 @@
 
 ResolveForge extends TrueForge with evidence-driven issue reproduction, bounded JCode fixes, independent verification, and human approval.
 
-The project is under active hackathon development. The TrueForge upstream documentation follows.
+## Run the ResolveForge demo
+
+The demo contains three seeded defects: an invoice export ignores its status filter, tax is calculated after a discount, and a migration drops a column. The first two can produce a bounded patch. The migration stops for human review.
+
+Install the workspace dependencies, then start the invoice UI and API.
+
+```sh
+pnpm install --frozen-lockfile
+pnpm resolveforge:demo
+```
+
+In another terminal, start the MCP service. Set the target repository to this checkout so that `start_fix` cannot receive another repository path.
+
+```sh
+export RESOLVEFORGE_TARGET_REPO="$PWD"
+pnpm resolveforge:dev
+```
+
+Start TrueForge with a configured model. Set the model fully qualified name, then register the local MCP service and the `resolveforge` coordinator. The command is idempotent.
+
+```sh
+export RESOLVEFORGE_COORDINATOR_MODEL="provider/model"
+pnpm resolveforge:bootstrap
+```
+
+Use the `resolveforge` agent to triage an issue, reproduce every reported route, request `start_fix`, then run `verify_fix` and `review_patch`. TrueForge requires approval before `start_fix` and `cancel_fix`.
+
+The default integration mode uses deterministic adapters for the demo. Set `RESOLVEFORGE_INTEGRATION_MODE=live` and `TYPESAFE_API_KEY` to use Jev triage and JCode. A Git worktree isolates source changes and ResolveForge rejects out-of-scope diffs or changed acceptance files. A worktree is not an operating-system sandbox. Run untrusted repositories in a container or VM before you enable JCode.
+
+Run the focused checks with:
+
+```sh
+pnpm resolveforge:typecheck
+pnpm resolveforge:test
+pnpm --filter @resolveforge/resolution-tools build
+pnpm --filter @resolveforge/demo build
+```
+
+The TrueForge upstream documentation follows.
 
 <p align="center">
   <a href="https://trueforge.dev">

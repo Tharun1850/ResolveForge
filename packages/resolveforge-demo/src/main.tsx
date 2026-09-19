@@ -5,7 +5,7 @@ if (import.meta.env.DEV) {
     onEvent: event => {
       if (event.kind === 'commit') {
         const summary = window.__RESOLVEFORGE_RENDERS__ ?? { components: {}, total: 0 };
-        window.__RESOLVEFORGE_RENDERS__ = { ...summary, total: summary.total + event.tree.length };
+        window.__RESOLVEFORGE_RENDERS__ = { ...summary, total: summary.total + (event.tree?.length ?? 0) };
       }
     },
   });

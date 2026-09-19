@@ -1,0 +1,146 @@
+import { resolve } from 'node:path';
+
+import type { ResolveForgeConfig } from './config.js';
+import { EvidenceStore } from './evidence-store.js';
+import { DemoFixClient, JcodeFixClient, type FixClient } from './fix-client.js';
+import { JobManager } from './job-manager.js';
+import { decideReview, evaluateEvidenceGate } from './policy.js';
+import { reproduceIssue } from './reproduction.js';
+import { DemoTriageClient, TypeSafeTriageClient, type TriageClient } from './triage.js';
+import {
+  CaseIdSchema,
+  CaseRecordSchema,
+  makeCaseId,
+  TriageResponseSchema,
+  type CaseId,
+  type CaseRecord,
+  type DiagnosticRoute,
+  type JobId,
+  type Review,
+  type TriageResponse,
+  type VerificationReport,
+} from './types.js';
+import { IndependentVerifier } from './verifier.js';
+
+const DEMO_ALLOWED_SCOPE = 'packages/resolveforge-demo/src';
+
+export class ResolveForgeService {
+  private readonly cases = new Map<CaseId, CaseRecord>();
+  private readonly reports = new Map<JobId, VerificationReport>();
+  private caseOrdinal = 0;
+
+  constructor(
+    private readonly config: ResolveForgeConfig,
+    private readonly evidenceStore: EvidenceStore,
+    private readonly triageClient: TriageClient,
+    private readonly jobManager: JobManager,
+    private readonly verifier: IndependentVerifier,
+  ) {}
+
+  async triage(input: { context: string | undefined; issue: string }): Promise<TriageResponse> {
+    const triage = await this.triageClient.triage({ context: input.context ?? null, issue: input.issue });
+    this.caseOrdinal += 1;
+    const timestamp = new Date();
+    const base = makeCaseId(timestamp);
+    const caseId = CaseIdSchema.parse(`${base}_${String(this.caseOrdinal)}`);
+    const record = CaseRecordSchema.parse({ case_id: caseId, issue: input.issue, triage });
+    this.cases.set(caseId, record);
+    return TriageResponseSchema.parse({ case_id: caseId, triage });
+  }
+
+  async reproduce(input: { caseId: CaseId; issue: string; routes: DiagnosticRoute[] }) {
+    const triage = this.cases.get(input.caseId);
+    if (!triage) {
+      throw new Error('Run triage_issue before reproducing this case.');
+    }
+    if (triage.triage.routes.some(route => !input.routes.includes(route))) {
+      throw new Error('Reproduction must include every route selected during triage.');
+    }
+    if (input.issue !== triage.issue) {
+      throw new Error('The provided issue does not match the triaged case.');
+    }
+    const evidence = reproduceIssue(input);
+    await this.evidenceStore.saveEvidence(evidence);
+    return evidence;
+  }
+
+  async profileReact(input: { caseId: CaseId; issue: string }) {
+    const evidence = await this.evidenceStore.readEvidence(input.caseId);
+    if (evidence.issue !== input.issue) {
+      throw new Error('The provided issue does not match the evidence recorded for this case.');
+    }
+    const reactEvidence = evidence.routes.filter(route => route.route === 'react_ui');
+    if (reactEvidence.length === 0) {
+      throw new Error('No React diagnostic route was recorded for this case.');
+    }
+    return reactEvidence;
+  }
+
+  async startFix(input: { allowedScope: string; caseId: CaseId; repositoryPath: string }) {
+    if (input.allowedScope !== DEMO_ALLOWED_SCOPE) {
+      throw new Error(`This MVP permits fixes only in ${DEMO_ALLOWED_SCOPE}.`);
+    }
+    const repositoryPath = resolve(input.repositoryPath);
+    if (this.config.targetRepo && repositoryPath !== this.config.targetRepo) {
+      throw new Error('The requested repository does not match RESOLVEFORGE_TARGET_REPO.');
+    }
+    const evidence = await this.evidenceStore.readEvidence(input.caseId);
+    const gate = evaluateEvidenceGate(evidence);
+    if (gate.kind !== 'allowed') {
+      throw new Error(`Fix is not permitted: ${gate.reason}`);
+    }
+    return this.jobManager.start({
+      allowedScope: input.allowedScope,
+      caseId: input.caseId,
+      evidence,
+      issue: evidence.issue,
+      repositoryPath,
+    });
+  }
+
+  getFixStatus(jobId: JobId) {
+    return this.jobManager.get(jobId);
+  }
+
+  async cancelFix(jobId: JobId) {
+    return this.jobManager.cancel(jobId);
+  }
+
+  async verifyFix(input: { caseId: CaseId; jobId: JobId }): Promise<VerificationReport> {
+    const job = this.jobManager.get(input.jobId);
+    if (job.case_id !== input.caseId) {
+      throw new Error('The job does not belong to the supplied case.');
+    }
+    if (job.state.kind !== 'completed') {
+      throw new Error('A fix must complete before independent verification can run.');
+    }
+    const report = await this.verifier.verify(job);
+    this.reports.set(input.jobId, report);
+    return report;
+  }
+
+  reviewPatch(input: { caseId: CaseId; jobId: JobId }): Review {
+    const report = this.reports.get(input.jobId);
+    if (!report || report.case_id !== input.caseId) {
+      throw new Error('Run verify_fix for this case before requesting a review.');
+    }
+    return decideReview(report);
+  }
+}
+
+export function createResolveForgeService(config: ResolveForgeConfig): ResolveForgeService {
+  const evidenceStore = new EvidenceStore(config.dataDir);
+  const triageClient =
+    config.integrationMode === 'live' && config.typeSafeApiKey
+      ? new TypeSafeTriageClient(config.typeSafeApiKey)
+      : new DemoTriageClient();
+  const fixClient: FixClient = config.integrationMode === 'live' ? new JcodeFixClient() : new DemoFixClient();
+  const jobManager = new JobManager(config, evidenceStore, fixClient);
+  return new ResolveForgeService(
+    config,
+    evidenceStore,
+    triageClient,
+    jobManager,
+    new IndependentVerifier(config, evidenceStore),
+  );
+}

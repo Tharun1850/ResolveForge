@@ -42,7 +42,7 @@
     "resolveforge:bootstrap": "pnpm --filter @resolveforge/resolution-tools bootstrap",
     "resolveforge:demo": "pnpm --filter @resolveforge/demo dev",
     "resolveforge:dev": "pnpm --filter @resolveforge/resolution-tools dev",
-    "resolveforge:test": "pnpm --filter @resolveforge/resolution-tools test",
+    "resolveforge:test": "pnpm --filter @resolveforge/resolution-tools test && pnpm --filter @resolveforge/demo test",
     "resolveforge:typecheck": "pnpm --filter @resolveforge/resolution-tools typecheck && pnpm --filter @resolveforge/demo typecheck",
     "test:frontend": "pnpm --filter frontend test",
     "test:chart-version": "bash tests/scripts/resolve-chart-version.test.sh",
