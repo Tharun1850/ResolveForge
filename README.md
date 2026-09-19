@@ -29,7 +29,9 @@ pnpm resolveforge:bootstrap
 
 Use the `resolveforge` agent to triage an issue, reproduce every reported route, request `start_fix`, then run `verify_fix` and `review_patch`. TrueForge requires approval before `start_fix` and `cancel_fix`.
 
-The default integration mode uses deterministic adapters for the demo. Set `RESOLVEFORGE_INTEGRATION_MODE=live` and `TYPESAFE_API_KEY` to use Jev triage and JCode. A Git worktree isolates source changes and ResolveForge rejects out-of-scope diffs or changed acceptance files. A worktree is not an operating-system sandbox. Run untrusted repositories in a container or VM before you enable JCode.
+The default integration mode uses deterministic adapters for the demo. In live mode, ResolveForge sends triage and the final semantic review to Jev when `TYPESAFE_API_KEY` is set. Live reproduction does not invent evidence. It blocks `start_fix` until a repository-specific diagnostic adapter records observed behavior. JCode denies every unapproved permission request. Run JCode in a container or VM and add a bounded approval adapter before you enable live patching.
+
+ResolveForge creates a Git worktree for each patch. It hashes the protected worktree tests and the independent canonical tests before coding. It then rejects out-of-scope files, changed tests, stale verification, and destructive patches before approval.
 
 Run the focused checks with:
 

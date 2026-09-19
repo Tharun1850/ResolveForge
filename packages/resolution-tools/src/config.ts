@@ -15,9 +15,9 @@ const EnvironmentSchema = z
     RESOLVEFORGE_TRUEFORGE_URL: z.url().default('http://localhost:8790'),
     TYPESAFE_API_KEY: z.string().trim().min(1).optional(),
   })
-  .passthrough();
+  .loose();
 
-export type ResolveForgeConfig = {
+export interface ResolveForgeConfig {
   commandTimeoutMs: number;
   coordinatorModel: string | null;
   dataDir: string;
@@ -28,7 +28,7 @@ export type ResolveForgeConfig = {
   targetRepo: string | null;
   trueForgeUrl: string;
   typeSafeApiKey: string | null;
-};
+}
 
 export function readConfig(env: NodeJS.ProcessEnv = process.env): ResolveForgeConfig {
   const parsed = EnvironmentSchema.parse(env);

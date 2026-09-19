@@ -1,7 +1,7 @@
-type RenderSummary = {
+interface RenderSummary {
   components: Record<string, number>;
   total: number;
-};
+}
 
 declare global {
   interface Window {

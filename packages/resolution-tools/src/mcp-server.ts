@@ -4,10 +4,11 @@ import { z } from 'zod';
 import type { ResolveForgeService } from './service.js';
 import { CaseIdSchema, DiagnosticRouteSchema, JobIdSchema } from './types.js';
 
-type ToolResult = {
+interface ToolResult {
+  [key: string]: unknown;
   content: [{ type: 'text'; text: string }];
   isError?: true;
-};
+}
 
 function textResult(value: unknown): ToolResult {
   return { content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] };
@@ -18,7 +19,7 @@ function errorResult(error: unknown): ToolResult {
   return { content: [{ type: 'text', text: message }], isError: true };
 }
 
-async function safely(run: () => Promise<unknown> | unknown): Promise<ToolResult> {
+async function safely(run: () => unknown): Promise<ToolResult> {
   try {
     return textResult(await run());
   } catch (error) {

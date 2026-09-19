@@ -1,18 +1,18 @@
 import type { DiagnosticRoute, EvidenceBundle, RouteEvidence } from './types.js';
 
-function evidenceForRoute(input: { issue: string; route: DiagnosticRoute }): RouteEvidence {
+function evidenceForDemoRoute(input: { issue: string; route: DiagnosticRoute }): RouteEvidence {
   const text = input.issue.toLowerCase();
   switch (input.route) {
     case 'react_ui':
       return {
         route: 'react_ui',
         status: 'reproduced',
-        expected_behavior: 'Changing the invoice status filter keeps the interface responsive.',
-        actual_behavior: 'The seeded invoice view re-renders every row after a filter change.',
+        expected_behavior: 'Changing the invoice status filter shows only matching invoice rows.',
+        actual_behavior: 'The seeded invoice view renders paid rows after selecting Unpaid.',
         steps: ['Open the invoice page.', 'Select Unpaid in the status filter.'],
-        assertions: [{ name: 'render budget', passed: false, detail: 'Render count exceeds the seeded budget.' }],
+        assertions: [{ name: 'visible invoice rows', passed: false, detail: 'The table contains paid invoice rows.' }],
         artifacts: [],
-        diagnostics: { render_count: 48, route: 'react_ui' },
+        diagnostics: { selected_status: 'unpaid', contains_paid_invoice: true, route: 'react_ui' },
       };
     case 'backend_api':
       if (text.includes('discount') || text.includes('tax')) {
@@ -99,7 +99,7 @@ function evidenceForRoute(input: { issue: string; route: DiagnosticRoute }): Rou
   }
 }
 
-export function reproduceIssue(input: {
+export function reproduceDemoIssue(input: {
   caseId: EvidenceBundle['case_id'];
   issue: string;
   routes: DiagnosticRoute[];
@@ -107,7 +107,29 @@ export function reproduceIssue(input: {
   return {
     case_id: input.caseId,
     issue: input.issue,
-    routes: input.routes.map(route => evidenceForRoute({ issue: input.issue, route })),
+    routes: input.routes.map(route => evidenceForDemoRoute({ issue: input.issue, route })),
+    created_at: new Date().toISOString(),
+  };
+}
+
+export function reproduceLiveIssue(input: {
+  caseId: EvidenceBundle['case_id'];
+  issue: string;
+  routes: DiagnosticRoute[];
+}): EvidenceBundle {
+  return {
+    case_id: input.caseId,
+    issue: input.issue,
+    routes: input.routes.map(route => ({
+      route,
+      status: 'not_reproduced',
+      expected_behavior: 'A configured live diagnostic adapter records the observed behavior.',
+      actual_behavior: 'No live diagnostic adapter is configured for this route.',
+      steps: [],
+      assertions: [],
+      artifacts: [],
+      diagnostics: { integration_mode: 'live', adapter_configured: false },
+    })),
     created_at: new Date().toISOString(),
   };
 }

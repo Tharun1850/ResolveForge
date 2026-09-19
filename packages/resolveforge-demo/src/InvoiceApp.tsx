@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 
-import { filterInvoices, invoices, type InvoiceStatus } from './invoice-model.js';
+import { displayedInvoices, filterInvoices, type InvoiceStatus } from './invoice-model.js';
 import { recordRender } from './render-telemetry.js';
 
 function InvoiceRow({ amount, id, status }: { amount: number; id: string; status: InvoiceStatus }): React.JSX.Element {
@@ -17,7 +17,7 @@ function InvoiceRow({ amount, id, status }: { amount: number; id: string; status
 export function InvoiceApp(): React.JSX.Element {
   const [status, setStatus] = useState<InvoiceStatus | null>(null);
   const visibleInvoices = useMemo(() => filterInvoices(status), [status]);
-  const rows = invoices.map(invoice => <InvoiceRow key={invoice.id} {...invoice} />);
+  const rows = displayedInvoices(visibleInvoices).map(invoice => <InvoiceRow key={invoice.id} {...invoice} />);
 
   async function exportCsv(): Promise<void> {
     const query = status ? `?status=${status}` : '';

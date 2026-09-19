@@ -1,12 +1,12 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { JcodeClient, type ApiEvent } from '@1jehuang/jcode-sdk';
+import { JcodeClient } from '@1jehuang/jcode-sdk';
 
-export type FixRun = {
+export interface FixRun {
   cancel(): Promise<void>;
   completion: Promise<string>;
-};
+}
 
 export interface FixClient {
   start(input: {
@@ -15,15 +15,6 @@ export interface FixClient {
     workingDir: string;
     recordEvent: (event: string) => void;
   }): Promise<FixRun>;
-}
-
-function decisionForPermission(event: Extract<ApiEvent, { ev: 'permission_request' }>): 'allow' | 'deny' {
-  const text = `${event.tool_name} ${event.description}`.toLowerCase();
-  const denied = ['git commit', 'git push', 'pull request', 'curl ', 'wget ', 'http://', 'https://', '../', 'rm -rf'];
-  if (denied.some(token => text.includes(token))) {
-    return 'deny';
-  }
-  return 'allow';
 }
 
 export class JcodeFixClient implements FixClient {
@@ -43,22 +34,27 @@ export class JcodeFixClient implements FixClient {
       'Do not edit tests, commit, push, create a pull request, access parent paths, or use the network.',
       'Run only focused local validation commands. Return a concise summary of the code change and remaining assumptions.',
     ].join('\n');
+    let deniedPermission: string | null = null;
     const completion = client
       .run(session.session_id, prompt, {
         autoApprove: false,
         onEvent: event => {
           input.recordEvent(JSON.stringify(event));
           if (event.ev === 'permission_request') {
-            const decision = decisionForPermission(event);
-            void client.respondToPermission(event.session_id, event.request_id, decision);
+            deniedPermission = `${event.tool_name} ${event.description}`;
+            input.recordEvent(`Denied JCode permission request: ${event.tool_name} ${event.description}`);
+            void client.respondToPermission(event.session_id, event.request_id, 'deny');
           }
         },
       })
       .then(async result => {
         await client.close();
+        if (deniedPermission) {
+          throw new Error(`JCode requested an unapproved action: ${deniedPermission}`);
+        }
         return result.text || 'JCode completed without a text summary.';
       })
-      .catch(async error => {
+      .catch(async (error: unknown) => {
         await client.close();
         throw error;
       });
@@ -81,7 +77,7 @@ async function replaceRequired(input: { path: string; from: string; to: string }
 }
 
 export class DemoFixClient implements FixClient {
-  async start(input: {
+  start(input: {
     evidencePath: string;
     issue: string;
     workingDir: string;
@@ -100,13 +96,38 @@ export class DemoFixClient implements FixClient {
       } else {
         await replaceRequired({
           path: modelPath,
-          from: 'return invoices;',
-          to: 'return status ? invoices.filter(invoice => invoice.status === status) : invoices;',
+          from: [
+            'export function exportInvoices(status: InvoiceStatus | null): Invoice[] {',
+            '  // Seeded defect. The export ignores an active filter until ResolveForge fixes it.',
+            '  void status;',
+            '  return invoices;',
+            '}',
+          ].join('\n'),
+          to: [
+            'export function exportInvoices(status: InvoiceStatus | null): Invoice[] {',
+            '  return status ? invoices.filter(invoice => invoice.status === status) : invoices;',
+            '}',
+          ].join('\n'),
+        });
+        await replaceRequired({
+          path: modelPath,
+          from: [
+            'export function displayedInvoices(visibleInvoices: Invoice[]): Invoice[] {',
+            '  // Seeded defect. The table renders every invoice after the status filter changes.',
+            '  void visibleInvoices;',
+            '  return invoices;',
+            '}',
+          ].join('\n'),
+          to: [
+            'export function displayedInvoices(visibleInvoices: Invoice[]): Invoice[] {',
+            '  return visibleInvoices;',
+            '}',
+          ].join('\n'),
         });
       }
       input.recordEvent(`demo worker used ${input.evidencePath}`);
       return 'Demo patch applied to the seeded invoice defect.';
     })();
-    return { cancel: async () => undefined, completion };
+    return Promise.resolve({ cancel: () => Promise.resolve(), completion });
   }
 }

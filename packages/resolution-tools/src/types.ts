@@ -93,7 +93,7 @@ export const EvidenceBundleSchema = z
     case_id: CaseIdSchema,
     issue: z.string().min(1),
     routes: z.array(RouteEvidenceSchema).min(1),
-    created_at: z.string().datetime(),
+    created_at: z.iso.datetime(),
   })
   .strict();
 
@@ -115,10 +115,12 @@ export const VerificationReportSchema = z
     tests_passed: z.boolean(),
     original_scenarios_passed: z.boolean(),
     protected_tests_unchanged: z.boolean(),
+    independent_tests_unchanged: z.boolean(),
+    patch_fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
     changed_files: z.array(z.string()),
     before_after: z.record(z.string(), z.unknown()),
     command_results: z.array(CommandResultSchema),
-    created_at: z.string().datetime(),
+    created_at: z.iso.datetime(),
   })
   .strict();
 
@@ -140,13 +142,13 @@ export type Review = z.infer<typeof ReviewSchema>;
 const QueuedJobSchema = z
   .object({
     kind: z.literal('queued'),
-    created_at: z.string().datetime(),
+    created_at: z.iso.datetime(),
   })
   .strict();
 const RunningJobSchema = z
   .object({
     kind: z.literal('running'),
-    started_at: z.string().datetime(),
+    started_at: z.iso.datetime(),
   })
   .strict();
 const WaitingJobSchema = z
@@ -159,21 +161,21 @@ const WaitingJobSchema = z
 const CompletedJobSchema = z
   .object({
     kind: z.literal('completed'),
-    completed_at: z.string().datetime(),
+    completed_at: z.iso.datetime(),
     summary: z.string().min(1),
   })
   .strict();
 const FailedJobSchema = z
   .object({
     kind: z.literal('failed'),
-    failed_at: z.string().datetime(),
+    failed_at: z.iso.datetime(),
     message: z.string().min(1),
   })
   .strict();
 const CancelledJobSchema = z
   .object({
     kind: z.literal('cancelled'),
-    cancelled_at: z.string().datetime(),
+    cancelled_at: z.iso.datetime(),
   })
   .strict();
 
@@ -194,6 +196,8 @@ export const JobRecordSchema = z
     repository_path: z.string().min(1),
     worktree_path: z.string().min(1),
     allowed_scope: z.string().min(1),
+    protected_tests_hash: z.string().regex(/^[a-f0-9]{64}$/),
+    independent_tests_hash: z.string().regex(/^[a-f0-9]{64}$/),
     patch_attempt: z.number().int().positive(),
     state: JobStateSchema,
     events: z.array(z.string()),

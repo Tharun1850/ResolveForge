@@ -13,6 +13,7 @@ const InvoiceSchema = z
 const InvoiceRowsSchema = z.array(InvoiceSchema);
 
 type ExportInvoices = (status: 'paid' | 'unpaid' | null) => unknown;
+type DisplayedInvoices = (visibleInvoices: unknown) => unknown;
 type CalculateInvoiceTotal = (input: { discount: number; subtotal: number; taxRate: number }) => unknown;
 
 function isExportInvoices(value: unknown): value is ExportInvoices {
@@ -20,6 +21,10 @@ function isExportInvoices(value: unknown): value is ExportInvoices {
 }
 
 function isCalculateInvoiceTotal(value: unknown): value is CalculateInvoiceTotal {
+  return typeof value === 'function';
+}
+
+function isDisplayedInvoices(value: unknown): value is DisplayedInvoices {
   return typeof value === 'function';
 }
 
@@ -34,7 +39,7 @@ if (typeof model !== 'object' || model === null) {
 }
 
 if (scenario === 'export') {
-  const exportInvoices = Reflect.get(model, 'exportInvoices');
+  const exportInvoices: unknown = Reflect.get(model, 'exportInvoices');
   if (!isExportInvoices(exportInvoices)) {
     throw new Error('The invoice model does not export a callable exportInvoices function.');
   }
@@ -44,8 +49,18 @@ if (scenario === 'export') {
     ['inv_001', 'inv_003'],
     'CSV export must respect the unpaid filter.',
   );
+  const displayedInvoices: unknown = Reflect.get(model, 'displayedInvoices');
+  if (!isDisplayedInvoices(displayedInvoices)) {
+    throw new Error('The invoice model does not export a callable displayedInvoices function.');
+  }
+  const displayedRows = InvoiceRowsSchema.parse(displayedInvoices(rows));
+  assert.deepEqual(
+    displayedRows.map(invoice => invoice.id),
+    ['inv_001', 'inv_003'],
+    'The invoice table must respect the unpaid filter.',
+  );
 } else {
-  const calculateInvoiceTotal = Reflect.get(model, 'calculateInvoiceTotal');
+  const calculateInvoiceTotal: unknown = Reflect.get(model, 'calculateInvoiceTotal');
   if (!isCalculateInvoiceTotal(calculateInvoiceTotal)) {
     throw new Error('The invoice model does not export a callable calculateInvoiceTotal function.');
   }

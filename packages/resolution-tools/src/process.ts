@@ -1,6 +1,9 @@
 import { spawn } from 'node:child_process';
 
-export type ProcessResult = { exitCode: number; output: string };
+export interface ProcessResult {
+  exitCode: number;
+  output: string;
+}
 
 export function runProcess(input: {
   command: string;

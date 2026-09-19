@@ -4,13 +4,20 @@ import type { ResolveForgeConfig } from './config.js';
 import { EvidenceStore } from './evidence-store.js';
 import { DemoFixClient, JcodeFixClient, type FixClient } from './fix-client.js';
 import { JobManager } from './job-manager.js';
-import { decideReview, evaluateEvidenceGate } from './policy.js';
-import { reproduceIssue } from './reproduction.js';
+import { evaluateEvidenceGate } from './policy.js';
+import { reproduceDemoIssue, reproduceLiveIssue } from './reproduction.js';
+import {
+  DemoSemanticReviewClient,
+  JevSemanticReviewClient,
+  UnavailableSemanticReviewClient,
+  type SemanticReviewClient,
+} from './semantic-review.js';
 import { DemoTriageClient, TypeSafeTriageClient, type TriageClient } from './triage.js';
 import {
   CaseIdSchema,
   CaseRecordSchema,
   makeCaseId,
+  ReviewSchema,
   TriageResponseSchema,
   type CaseId,
   type CaseRecord,
@@ -35,6 +42,7 @@ export class ResolveForgeService {
     private readonly triageClient: TriageClient,
     private readonly jobManager: JobManager,
     private readonly verifier: IndependentVerifier,
+    private readonly reviewClient: SemanticReviewClient,
   ) {}
 
   async triage(input: { context: string | undefined; issue: string }): Promise<TriageResponse> {
@@ -59,7 +67,7 @@ export class ResolveForgeService {
     if (input.issue !== triage.issue) {
       throw new Error('The provided issue does not match the triaged case.');
     }
-    const evidence = reproduceIssue(input);
+    const evidence = this.config.integrationMode === 'demo' ? reproduceDemoIssue(input) : reproduceLiveIssue(input);
     await this.evidenceStore.saveEvidence(evidence);
     return evidence;
   }
@@ -119,12 +127,33 @@ export class ResolveForgeService {
     return report;
   }
 
-  reviewPatch(input: { caseId: CaseId; jobId: JobId }): Review {
+  async reviewPatch(input: { caseId: CaseId; jobId: JobId }): Promise<Review> {
+    const job = this.jobManager.get(input.jobId);
     const report = this.reports.get(input.jobId);
-    if (!report || report.case_id !== input.caseId) {
+    if (report?.case_id !== input.caseId) {
       throw new Error('Run verify_fix for this case before requesting a review.');
     }
-    return decideReview(report);
+    if (job.state.kind !== 'completed') {
+      return ReviewSchema.parse({
+        decision: 'revise',
+        issue_covered: false,
+        scope_expanded: false,
+        tests_weakened: false,
+        destructive_operation: false,
+        rationale: 'The job changed state after verification. Run verification again before review.',
+      });
+    }
+    if ((await this.verifier.fingerprint(job)) !== report.patch_fingerprint) {
+      return ReviewSchema.parse({
+        decision: 'revise',
+        issue_covered: false,
+        scope_expanded: true,
+        tests_weakened: false,
+        destructive_operation: false,
+        rationale: 'The worktree changed after verification. Run independent verification again before review.',
+      });
+    }
+    return this.reviewClient.review({ job, patch: await this.verifier.patchText(job), verification: report });
   }
 }
 
@@ -135,6 +164,12 @@ export function createResolveForgeService(config: ResolveForgeConfig): ResolveFo
       ? new TypeSafeTriageClient(config.typeSafeApiKey)
       : new DemoTriageClient();
   const fixClient: FixClient = config.integrationMode === 'live' ? new JcodeFixClient() : new DemoFixClient();
+  const reviewClient: SemanticReviewClient =
+    config.integrationMode === 'demo'
+      ? new DemoSemanticReviewClient()
+      : config.typeSafeApiKey
+        ? new JevSemanticReviewClient(config.typeSafeApiKey)
+        : new UnavailableSemanticReviewClient();
   const jobManager = new JobManager(config, evidenceStore, fixClient);
   return new ResolveForgeService(
     config,
@@ -142,5 +177,6 @@ export function createResolveForgeService(config: ResolveForgeConfig): ResolveFo
     triageClient,
     jobManager,
     new IndependentVerifier(config, evidenceStore),
+    reviewClient,
   );
 }

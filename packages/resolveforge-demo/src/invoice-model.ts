@@ -1,11 +1,11 @@
 export const InvoiceStatus = ['paid', 'unpaid'] as const;
 export type InvoiceStatus = (typeof InvoiceStatus)[number];
 
-export type Invoice = {
+export interface Invoice {
   amount: number;
   id: string;
   status: InvoiceStatus;
-};
+}
 
 export const invoices: Invoice[] = [
   { id: 'inv_001', status: 'unpaid', amount: 120 },
@@ -21,6 +21,12 @@ export function filterInvoices(status: InvoiceStatus | null): Invoice[] {
 export function exportInvoices(status: InvoiceStatus | null): Invoice[] {
   // Seeded defect. The export ignores an active filter until ResolveForge fixes it.
   void status;
+  return invoices;
+}
+
+export function displayedInvoices(visibleInvoices: Invoice[]): Invoice[] {
+  // Seeded defect. The table renders every invoice after the status filter changes.
+  void visibleInvoices;
   return invoices;
 }
 

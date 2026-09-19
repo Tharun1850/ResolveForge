@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { readConfig } from './config.js';
 
 const AgentListSchema = z.object({
-  data: z.array(z.object({ id: z.string().min(1), name: z.string().min(1) }).passthrough()),
+  data: z.array(z.object({ id: z.string().min(1), name: z.string().min(1) }).loose()),
 });
 
 const TOOL_NAMES = [
@@ -98,7 +98,7 @@ async function bootstrap(): Promise<void> {
   process.stdout.write('Created TrueForge agent resolveforge.\n');
 }
 
-void bootstrap().catch(error => {
+void bootstrap().catch((error: unknown) => {
   const message = error instanceof Error ? error.message : 'ResolveForge bootstrap failed with a non-error value.';
   process.stderr.write(`${message}\n`);
   process.exitCode = 1;

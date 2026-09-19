@@ -69,8 +69,8 @@ function demoResult(input: { issue: string }): TriageResult {
 }
 
 export class DemoTriageClient implements TriageClient {
-  async triage(input: { issue: string; context: string | null }): Promise<TriageResult> {
-    return demoResult(input);
+  triage(input: { issue: string; context: string | null }): Promise<TriageResult> {
+    return Promise.resolve(demoResult(input));
   }
 }
 
