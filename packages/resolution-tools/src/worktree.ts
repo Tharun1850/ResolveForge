@@ -1,5 +1,5 @@
 import { mkdir } from 'node:fs/promises';
-import { join, relative, resolve } from 'node:path';
+import { join, posix, resolve } from 'node:path';
 
 import { runProcess } from './process.js';
 
@@ -34,7 +34,19 @@ export async function createWorktree(input: {
 }
 
 export function isAllowedChange(input: { allowedScope: string; changedFile: string }): boolean {
-  const scope = relative('.', resolve(input.allowedScope));
-  const file = relative('.', resolve(input.changedFile));
+  const scope = posix.normalize(input.allowedScope.replaceAll('\\', '/'));
+  const file = posix.normalize(input.changedFile.replaceAll('\\', '/'));
+  if (
+    scope === '.' ||
+    file === '.' ||
+    posix.isAbsolute(scope) ||
+    posix.isAbsolute(file) ||
+    scope === '..' ||
+    file === '..' ||
+    scope.startsWith('../') ||
+    file.startsWith('../')
+  ) {
+    return false;
+  }
   return file === scope || file.startsWith(`${scope}/`);
 }

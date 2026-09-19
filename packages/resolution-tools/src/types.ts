@@ -67,6 +67,8 @@ export const RouteEvidenceSchema = z
   })
   .strict();
 
+export type RouteEvidence = z.infer<typeof RouteEvidenceSchema>;
+
 export const EvidenceBundleSchema = z
   .object({
     case_id: CaseIdSchema,
@@ -169,6 +171,7 @@ export const JobRecordSchema = z
   .object({
     job_id: JobIdSchema,
     case_id: CaseIdSchema,
+    issue: z.string().min(1),
     repository_path: z.string().min(1),
     worktree_path: z.string().min(1),
     allowed_scope: z.string().min(1),

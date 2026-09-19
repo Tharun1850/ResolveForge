@@ -49,6 +49,7 @@ export class JobManager {
     const job: JobRecord = {
       job_id: jobId,
       case_id: input.caseId,
+      issue: input.issue,
       repository_path: input.repositoryPath,
       worktree_path: worktreePath,
       allowed_scope: input.allowedScope,
