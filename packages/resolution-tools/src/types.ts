@@ -24,6 +24,8 @@ export const DiagnosticRouteSchema = z.enum([
   'unknown',
 ]);
 
+export type DiagnosticRoute = z.infer<typeof DiagnosticRouteSchema>;
+
 export const TriageResultSchema = z
   .object({
     issue_type: IssueTypeSchema,
