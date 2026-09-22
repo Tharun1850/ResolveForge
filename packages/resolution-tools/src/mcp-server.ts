@@ -72,7 +72,6 @@ export function createResolveForgeMcpServer(service: ResolveForgeService): McpSe
     input =>
       safely(() =>
         service.startFix({
-          allowedScope: input.allowed_scope,
           caseId: input.case_id,
         }),
       ),

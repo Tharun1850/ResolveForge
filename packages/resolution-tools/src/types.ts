@@ -195,7 +195,7 @@ export const JobRecordSchema = z
     issue: z.string().min(1),
     repository_path: z.string().min(1),
     worktree_path: z.string().min(1),
-    allowed_scope: z.string().min(1),
+    allowed_scopes: z.array(z.string().min(1)).min(1),
     protected_tests_hash: z.string().regex(/^[a-f0-9]{64}$/),
     independent_tests_hash: z.string().regex(/^[a-f0-9]{64}$/),
     patch_attempt: z.number().int().positive(),
@@ -224,7 +224,6 @@ export const ReproduceIssueInputSchema = z
 export const StartFixInputSchema = z
   .object({
     case_id: CaseIdSchema,
-    allowed_scope: z.string().trim().min(1).default('packages/resolveforge-demo/src'),
   })
   .strict();
 

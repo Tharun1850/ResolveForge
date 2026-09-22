@@ -10,10 +10,10 @@ function jobRecord(): JobRecord {
   return {
     job_id: JobIdSchema.parse('job_20260919210000000_1'),
     case_id: caseId,
-    issue: 'Invoice CSV export ignores the unpaid filter.',
+    issue: 'The API returns a stale value.',
     repository_path: '/tmp/repository',
     worktree_path: '/tmp/worktree',
-    allowed_scope: 'packages/resolveforge-demo/src',
+    allowed_scopes: ['src'],
     protected_tests_hash: '0'.repeat(64),
     independent_tests_hash: '0'.repeat(64),
     patch_attempt: 1,

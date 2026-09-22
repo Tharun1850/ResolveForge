@@ -2,21 +2,42 @@
 
 ResolveForge extends TrueForge with evidence-driven issue reproduction, bounded JCode fixes, independent verification, and human approval.
 
-## Run the ResolveForge demo
+## Configure a target repository
 
-The demo contains three seeded defects: an invoice export ignores its status filter, tax is calculated after a discount, and a migration drops a column. The first two can produce a bounded patch. The migration stops for human review.
+ResolveForge runs repository-owned diagnostics and verification commands. Add and commit `.resolveforge/config.json` in the repository that ResolveForge will inspect:
 
-Install the workspace dependencies, then start the invoice UI and API.
+```json
+{
+  "allowed_paths": ["src", "packages/api/src"],
+  "diagnostics": {
+    "react_ui": {
+      "command": "pnpm",
+      "args": ["diagnose:react"],
+      "react_scan_artifacts": [".resolveforge/artifacts/react-scan.json"]
+    },
+    "backend_api": {
+      "command": "pnpm",
+      "args": ["diagnose:api"]
+    }
+  },
+  "verification": {
+    "commands": [
+      { "command": "pnpm", "args": ["test"] },
+      { "command": "pnpm", "args": ["typecheck"] }
+    ],
+    "protected_paths": ["test/acceptance", ".resolveforge/config.json"]
+  }
+}
+```
+
+Each diagnostic command receives `RESOLVEFORGE_CASE_ID`, `RESOLVEFORGE_ISSUE`, and `RESOLVEFORGE_ROUTE`. It must write one route-evidence JSON object to stdout. React projects can use React Scan in their `react_ui` command and list its output files in `react_scan_artifacts`. Missing adapters, invalid JSON, and missing artifacts produce `not_reproduced` evidence and block patching.
+
+Install this workspace, then start the MCP service with the target repository and Jev credentials. The server reads the repository and edit scope from trusted configuration; `start_fix` accepts only a case ID.
 
 ```sh
 pnpm install --frozen-lockfile
-pnpm resolveforge:demo
-```
-
-In another terminal, start the MCP service. Set the target repository to this checkout. `start_fix` always uses this configured repository, so neither the agent nor the human needs to provide a path during approval.
-
-```sh
-export RESOLVEFORGE_TARGET_REPO="$PWD"
+export RESOLVEFORGE_TARGET_REPO="/path/to/target-repository"
+export TYPESAFE_API_KEY="..."
 pnpm resolveforge:dev
 ```
 
@@ -29,7 +50,7 @@ pnpm resolveforge:bootstrap
 
 Use the `resolveforge` agent to triage an issue, reproduce every reported route, request `start_fix`, then run `verify_fix` and `review_patch`. TrueForge requires approval before `start_fix` and `cancel_fix`.
 
-The default integration mode uses deterministic adapters for the demo. In live mode, ResolveForge sends triage and the final semantic review to Jev when `TYPESAFE_API_KEY` is set. Live reproduction does not invent evidence. It blocks `start_fix` until a repository-specific diagnostic adapter records observed behavior. JCode denies every unapproved permission request. Run JCode in a container or VM and add a bounded approval adapter before you enable live patching.
+ResolveForge sends triage and final semantic review to Jev. Without `TYPESAFE_API_KEY`, automated triage is unavailable and completed patches require human review. JCode denies every unapproved permission request. Run JCode in a container or VM and add a bounded approval adapter before enabling patching.
 
 ResolveForge creates a Git worktree for each patch. It hashes the protected worktree tests and the independent canonical tests before coding. It then rejects out-of-scope files, changed tests, stale verification, and destructive patches before approval.
 
@@ -39,7 +60,6 @@ Run the focused checks with:
 pnpm resolveforge:typecheck
 pnpm resolveforge:test
 pnpm --filter @resolveforge/resolution-tools build
-pnpm --filter @resolveforge/demo build
 ```
 
 The TrueForge upstream documentation follows.

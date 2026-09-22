@@ -1,16 +1,16 @@
 import type { ResolveForgeConfig } from './config.js';
 import { EvidenceStore } from './evidence-store.js';
-import { DemoFixClient, JcodeFixClient, type FixClient } from './fix-client.js';
+import { JcodeFixClient } from './fix-client.js';
 import { JobManager } from './job-manager.js';
 import { evaluateEvidenceGate } from './policy.js';
-import { reproduceDemoIssue, reproduceLiveIssue } from './reproduction.js';
+import { DiagnosticRunner } from './reproduction.js';
 import {
-  DemoSemanticReviewClient,
   JevSemanticReviewClient,
   UnavailableSemanticReviewClient,
   type SemanticReviewClient,
 } from './semantic-review.js';
-import { DemoTriageClient, TypeSafeTriageClient, type TriageClient } from './triage.js';
+import { readTargetConfig } from './target-config.js';
+import { TypeSafeTriageClient, UnavailableTriageClient, type TriageClient } from './triage.js';
 import {
   CaseIdSchema,
   CaseRecordSchema,
@@ -27,8 +27,6 @@ import {
 } from './types.js';
 import { IndependentVerifier } from './verifier.js';
 
-const DEMO_ALLOWED_SCOPE = 'packages/resolveforge-demo/src';
-
 export class ResolveForgeService {
   private readonly cases = new Map<CaseId, CaseRecord>();
   private readonly reports = new Map<JobId, VerificationReport>();
@@ -38,6 +36,7 @@ export class ResolveForgeService {
     private readonly config: ResolveForgeConfig,
     private readonly evidenceStore: EvidenceStore,
     private readonly triageClient: TriageClient,
+    private readonly diagnosticRunner: DiagnosticRunner,
     private readonly jobManager: JobManager,
     private readonly verifier: IndependentVerifier,
     private readonly reviewClient: SemanticReviewClient,
@@ -65,7 +64,11 @@ export class ResolveForgeService {
     if (input.issue !== triage.issue) {
       throw new Error('The provided issue does not match the triaged case.');
     }
-    const evidence = this.config.integrationMode === 'demo' ? reproduceDemoIssue(input) : reproduceLiveIssue(input);
+    const repositoryPath = this.requireTargetRepository();
+    const evidence = await this.diagnosticRunner.reproduce({
+      ...input,
+      workingDirectory: repositoryPath,
+    });
     await this.evidenceStore.saveEvidence(evidence);
     return evidence;
   }
@@ -82,21 +85,14 @@ export class ResolveForgeService {
     return reactEvidence;
   }
 
-  async startFix(input: { allowedScope: string; caseId: CaseId }) {
-    if (input.allowedScope !== DEMO_ALLOWED_SCOPE) {
-      throw new Error(`This MVP permits fixes only in ${DEMO_ALLOWED_SCOPE}.`);
-    }
-    const repositoryPath = this.config.targetRepo;
-    if (!repositoryPath) {
-      throw new Error('RESOLVEFORGE_TARGET_REPO must be configured before a fix can start.');
-    }
+  async startFix(input: { caseId: CaseId }) {
+    const repositoryPath = this.requireTargetRepository();
     const evidence = await this.evidenceStore.readEvidence(input.caseId);
     const gate = evaluateEvidenceGate(evidence);
     if (gate.kind !== 'allowed') {
       throw new Error(`Fix is not permitted: ${gate.reason}`);
     }
     return this.jobManager.start({
-      allowedScope: input.allowedScope,
       caseId: input.caseId,
       evidence,
       issue: evidence.issue,
@@ -153,28 +149,36 @@ export class ResolveForgeService {
     }
     return this.reviewClient.review({ job, patch: await this.verifier.patchText(job), verification: report });
   }
+
+  private requireTargetRepository(): string {
+    if (!this.config.targetRepo) {
+      throw new Error('RESOLVEFORGE_TARGET_REPO must be configured.');
+    }
+    return this.config.targetRepo;
+  }
 }
 
-export function createResolveForgeService(config: ResolveForgeConfig): ResolveForgeService {
+export async function createResolveForgeService(config: ResolveForgeConfig): Promise<ResolveForgeService> {
+  if (!config.targetRepo) {
+    throw new Error('RESOLVEFORGE_TARGET_REPO must be configured before the ResolveForge service starts.');
+  }
+  const targetConfig = await readTargetConfig(config.targetRepo);
   const evidenceStore = new EvidenceStore(config.dataDir);
-  const triageClient =
-    config.integrationMode === 'live' && config.typeSafeApiKey
-      ? new TypeSafeTriageClient(config.typeSafeApiKey)
-      : new DemoTriageClient();
-  const fixClient: FixClient = config.integrationMode === 'live' ? new JcodeFixClient() : new DemoFixClient();
-  const reviewClient: SemanticReviewClient =
-    config.integrationMode === 'demo'
-      ? new DemoSemanticReviewClient()
-      : config.typeSafeApiKey
-        ? new JevSemanticReviewClient(config.typeSafeApiKey)
-        : new UnavailableSemanticReviewClient();
-  const jobManager = new JobManager(config, evidenceStore, fixClient);
+  const triageClient = config.typeSafeApiKey
+    ? new TypeSafeTriageClient(config.typeSafeApiKey)
+    : new UnavailableTriageClient();
+  const diagnosticRunner = new DiagnosticRunner(targetConfig, config.commandTimeoutMs);
+  const reviewClient: SemanticReviewClient = config.typeSafeApiKey
+    ? new JevSemanticReviewClient(config.typeSafeApiKey)
+    : new UnavailableSemanticReviewClient();
+  const jobManager = new JobManager(config, targetConfig, evidenceStore, new JcodeFixClient());
   return new ResolveForgeService(
     config,
     evidenceStore,
     triageClient,
+    diagnosticRunner,
     jobManager,
-    new IndependentVerifier(config, evidenceStore),
+    new IndependentVerifier(config, targetConfig, evidenceStore, diagnosticRunner),
     reviewClient,
   );
 }

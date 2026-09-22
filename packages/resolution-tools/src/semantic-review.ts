@@ -23,7 +23,7 @@ function verificationFailureReview(input: ReviewInput): Review | null {
       decision: 'revise',
       issue_covered: input.verification.original_scenarios_passed,
       scope_expanded: input.verification.changed_files.some(
-        changedFile => !isAllowedChange({ allowedScope: input.job.allowed_scope, changedFile }),
+        changedFile => !isAllowedChange({ allowedScopes: input.job.allowed_scopes, changedFile }),
       ),
       tests_weakened: !input.verification.protected_tests_unchanged || !input.verification.independent_tests_unchanged,
       destructive_operation: DESTRUCTIVE_PATCH.test(input.patch),
@@ -31,41 +31,6 @@ function verificationFailureReview(input: ReviewInput): Review | null {
     });
   }
   return null;
-}
-
-export class DemoSemanticReviewClient implements SemanticReviewClient {
-  review(input: ReviewInput): Promise<Review> {
-    const failure = verificationFailureReview(input);
-    if (failure) {
-      return Promise.resolve(failure);
-    }
-    const scopeExpanded = input.verification.changed_files.some(
-      changedFile => !isAllowedChange({ allowedScope: input.job.allowed_scope, changedFile }),
-    );
-    const destructiveOperation = DESTRUCTIVE_PATCH.test(input.patch);
-    if (scopeExpanded || destructiveOperation) {
-      return Promise.resolve(
-        ReviewSchema.parse({
-          decision: 'handoff',
-          issue_covered: input.verification.original_scenarios_passed,
-          scope_expanded: scopeExpanded,
-          tests_weakened: false,
-          destructive_operation: destructiveOperation,
-          rationale: 'The patch changes scope or includes a destructive operation that requires human review.',
-        }),
-      );
-    }
-    return Promise.resolve(
-      ReviewSchema.parse({
-        decision: 'approve',
-        issue_covered: true,
-        scope_expanded: false,
-        tests_weakened: false,
-        destructive_operation: false,
-        rationale: 'Independent acceptance checks passed and the patch contains no destructive operation.',
-      }),
-    );
-  }
 }
 
 export class UnavailableSemanticReviewClient implements SemanticReviewClient {

@@ -6,71 +6,9 @@ export interface TriageClient {
   triage(input: { issue: string; context: string | null }): Promise<TriageResult>;
 }
 
-function demoResult(input: { issue: string }): TriageResult {
-  const text = input.issue.toLowerCase();
-  if (text.includes('migration') || text.includes('drop') || text.includes('column')) {
-    return TriageResultSchema.parse({
-      issue_type: 'bug',
-      severity: 'high',
-      routes: ['database'],
-      route_confidence: 0.97,
-      reproduction_ready: 0.9,
-      missing_information: [],
-    });
-  }
-  if (text.includes('discount') || text.includes('tax')) {
-    return TriageResultSchema.parse({
-      issue_type: 'bug',
-      severity: 'high',
-      routes: ['backend_api'],
-      route_confidence: 0.94,
-      reproduction_ready: 0.95,
-      missing_information: [],
-    });
-  }
-  if (text.includes('filter') || text.includes('freeze') || text.includes('invoice') || text.includes('csv')) {
-    return TriageResultSchema.parse({
-      issue_type: text.includes('freeze') ? 'performance' : 'bug',
-      severity: 'high',
-      routes: ['react_ui', 'backend_api'],
-      route_confidence: 0.91,
-      reproduction_ready: 0.92,
-      missing_information: [],
-    });
-  }
-  if (text.includes('config') || text.includes('environment')) {
-    return TriageResultSchema.parse({
-      issue_type: 'configuration',
-      severity: 'medium',
-      routes: ['configuration'],
-      route_confidence: 0.86,
-      reproduction_ready: 0.7,
-      missing_information: ['Expected startup command or environment values.'],
-    });
-  }
-  if (text.includes('document') || text.includes('readme')) {
-    return TriageResultSchema.parse({
-      issue_type: 'how_to',
-      severity: 'low',
-      routes: ['documentation'],
-      route_confidence: 0.79,
-      reproduction_ready: 0.65,
-      missing_information: [],
-    });
-  }
-  return TriageResultSchema.parse({
-    issue_type: 'unknown',
-    severity: 'medium',
-    routes: ['unknown'],
-    route_confidence: 0.3,
-    reproduction_ready: 0.2,
-    missing_information: ['Expected behavior and reproduction steps.'],
-  });
-}
-
-export class DemoTriageClient implements TriageClient {
-  triage(input: { issue: string; context: string | null }): Promise<TriageResult> {
-    return Promise.resolve(demoResult(input));
+export class UnavailableTriageClient implements TriageClient {
+  triage(): Promise<TriageResult> {
+    return Promise.reject(new Error('Automated triage requires TYPESAFE_API_KEY.'));
   }
 }
 

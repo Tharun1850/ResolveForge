@@ -46,6 +46,7 @@ export default defineConfig(
       '**/node_modules/**',
       '**/dist/**',
       '**/coverage/**',
+      '**/.resolveforge/**',
       '**/.pnpm-store/**',
       '**/.eslintcache',
       // Excluded from package tsconfigs; run via tsx/jest, not the type-aware ESLint project.

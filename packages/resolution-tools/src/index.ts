@@ -14,7 +14,7 @@ function writeJson(response: ServerResponse, status: number, body: unknown): voi
 async function handleMcp(
   request: IncomingMessage,
   response: ServerResponse,
-  service: ReturnType<typeof createResolveForgeService>,
+  service: Awaited<ReturnType<typeof createResolveForgeService>>,
 ) {
   const server = createResolveForgeMcpServer(service);
   const transport = new StreamableHTTPServerTransport({});
@@ -33,11 +33,11 @@ async function handleMcp(
 }
 
 const config = readConfig();
-const service = createResolveForgeService(config);
+const service = await createResolveForgeService(config);
 const httpServer = createServer((request, response) => {
   const url = new URL(request.url ?? '/', `http://${request.headers.host ?? '127.0.0.1'}`);
   if (request.method === 'GET' && url.pathname === '/healthz') {
-    writeJson(response, 200, { integration_mode: config.integrationMode, status: 'ok' });
+    writeJson(response, 200, { status: 'ok', target_repository: config.targetRepo });
     return;
   }
   if (url.pathname !== '/mcp') {

@@ -3,32 +3,20 @@ import test from 'node:test';
 
 import { isAllowedChange } from '../src/worktree.js';
 
-test('allows a changed file below the approved scope', () => {
+test('allows changed files below any configured path', () => {
+  assert.equal(isAllowedChange({ allowedScopes: ['src', 'packages/api/src'], changedFile: 'src/index.ts' }), true);
   assert.equal(
-    isAllowedChange({
-      allowedScope: 'packages/resolveforge-demo/src',
-      changedFile: 'packages/resolveforge-demo/src/invoice-model.ts',
-    }),
+    isAllowedChange({ allowedScopes: ['src', 'packages/api/src'], changedFile: 'packages/api/src/server.ts' }),
     true,
   );
 });
 
-test('rejects a changed file outside the approved scope', () => {
-  assert.equal(
-    isAllowedChange({
-      allowedScope: 'packages/resolveforge-demo/src',
-      changedFile: 'packages/resolveforge-demo/test/invoice-model.test.ts',
-    }),
-    false,
-  );
+test('rejects files outside configured paths', () => {
+  assert.equal(isAllowedChange({ allowedScopes: ['src'], changedFile: 'test/index.test.ts' }), false);
 });
 
 test('rejects absolute paths and parent-directory traversal', () => {
-  const allowedScope = 'packages/resolveforge-demo/src';
-  for (const changedFile of [
-    '/packages/resolveforge-demo/src/invoice-model.ts',
-    'packages/resolveforge-demo/src/../../resolution-tools/src/config.ts',
-  ]) {
-    assert.equal(isAllowedChange({ allowedScope, changedFile }), false);
+  for (const changedFile of ['/src/index.ts', 'src/../../secrets.txt']) {
+    assert.equal(isAllowedChange({ allowedScopes: ['src'], changedFile }), false);
   }
 });

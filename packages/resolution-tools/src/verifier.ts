@@ -3,27 +3,24 @@ import { join } from 'node:path';
 
 import type { ResolveForgeConfig } from './config.js';
 import { EvidenceStore } from './evidence-store.js';
-import { ACCEPTANCE_DIRECTORY, ACCEPTANCE_SCRIPT, hashDirectory, hashText } from './integrity.js';
+import { hashPaths, hashText } from './integrity.js';
 import { runProcess } from './process.js';
+import { DiagnosticRunner } from './reproduction.js';
+import type { Command, TargetConfig } from './target-config.js';
 import type { JobRecord, VerificationReport } from './types.js';
 import { isAllowedChange } from './worktree.js';
-
-const TSX_LOADER = join('packages', 'resolution-tools', 'node_modules', 'tsx', 'dist', 'loader.mjs');
 
 interface PatchSnapshot {
   changedFiles: string[];
   fingerprint: string;
 }
 
-function scenarioForIssue(issue: string): 'export' | 'tax' {
-  const text = issue.toLowerCase();
-  return text.includes('discount') || text.includes('tax') ? 'tax' : 'export';
-}
-
 export class IndependentVerifier {
   constructor(
     private readonly config: ResolveForgeConfig,
+    private readonly targetConfig: TargetConfig,
     private readonly evidenceStore: EvidenceStore,
+    private readonly diagnosticRunner: DiagnosticRunner,
   ) {}
 
   async fingerprint(job: JobRecord): Promise<string> {
@@ -62,31 +59,42 @@ export class IndependentVerifier {
   }
 
   async verify(job: JobRecord): Promise<VerificationReport> {
-    const protectedTests = join(job.worktree_path, ACCEPTANCE_DIRECTORY);
-    const snapshot = await this.inspectPatch(job);
-    const currentIndependentHash = await hashDirectory(join(job.repository_path, ACCEPTANCE_DIRECTORY));
+    const currentIndependentHash = await hashPaths(job.repository_path, this.targetConfig.verification.protected_paths);
     const independentTestsUnchanged = currentIndependentHash === job.independent_tests_hash;
-    const scopeAllowed = snapshot.changedFiles.every(changedFile =>
-      isAllowedChange({ allowedScope: job.allowed_scope, changedFile }),
+    const commandResults = await this.runVerificationCommands({
+      commands: this.targetConfig.verification.commands,
+      job,
+    });
+    const evidence = await this.evidenceStore.readEvidence(job.case_id);
+    const afterRoutes = await Promise.all(
+      evidence.routes.map(route =>
+        this.diagnosticRunner.run({
+          caseId: job.case_id,
+          issue: job.issue,
+          route: route.route,
+          workingDirectory: job.worktree_path,
+        }),
+      ),
     );
-    const scenario = scenarioForIssue(job.issue);
-    const acceptance = await this.runAcceptance({ independentTestsUnchanged, job, scenario });
-    const afterProtectedHash = await hashDirectory(protectedTests);
+    const scenariosPassed = afterRoutes.every(
+      route => route.assertions.length > 0 && route.assertions.every(assertion => assertion.passed),
+    );
+    const afterProtectedHash = await hashPaths(job.worktree_path, this.targetConfig.verification.protected_paths);
     const protectedTestsUnchanged = afterProtectedHash === job.protected_tests_hash;
-    const outputPath = await this.evidenceStore.saveArtifact(
-      job.case_id,
-      `${job.job_id}-verification.log`,
-      acceptance.output,
+    const snapshot = await this.inspectPatch(job);
+    const scopeAllowed = snapshot.changedFiles.every(changedFile =>
+      isAllowedChange({ allowedScopes: job.allowed_scopes, changedFile }),
     );
+    const commandsPassed = commandResults.every(result => result.exit_code === 0);
     const testsPassed =
-      acceptance.exitCode === 0 && scopeAllowed && protectedTestsUnchanged && independentTestsUnchanged;
+      commandsPassed && scenariosPassed && scopeAllowed && protectedTestsUnchanged && independentTestsUnchanged;
 
     return {
       case_id: job.case_id,
       job_id: job.job_id,
       patch_attempt: job.patch_attempt,
       tests_passed: testsPassed,
-      original_scenarios_passed: acceptance.exitCode === 0 && independentTestsUnchanged,
+      original_scenarios_passed: scenariosPassed && independentTestsUnchanged,
       protected_tests_unchanged: protectedTestsUnchanged,
       independent_tests_unchanged: independentTestsUnchanged,
       patch_fingerprint: snapshot.fingerprint,
@@ -97,24 +105,35 @@ export class IndependentVerifier {
         independent_test_hash_before: job.independent_tests_hash,
         independent_test_hash_after: currentIndependentHash,
         changed_files_within_allowed_scope: scopeAllowed,
-        scenario,
+        diagnostic_routes_before: evidence.routes,
+        diagnostic_routes_after: afterRoutes,
       },
-      command_results: [
-        {
-          command: [
-            process.execPath,
-            '--import',
-            join(job.repository_path, TSX_LOADER),
-            join(job.repository_path, ACCEPTANCE_SCRIPT),
-            job.worktree_path,
-            scenario,
-          ],
-          exit_code: acceptance.exitCode,
-          output_path: outputPath,
-        },
-      ],
+      command_results: commandResults,
       created_at: new Date().toISOString(),
     };
+  }
+
+  private async runVerificationCommands(input: { commands: Command[]; job: JobRecord }) {
+    const results = [];
+    for (const [index, command] of input.commands.entries()) {
+      const result = await runProcess({
+        command: command.command,
+        args: command.args,
+        cwd: input.job.worktree_path,
+        timeoutMs: this.config.commandTimeoutMs,
+      });
+      const outputPath = await this.evidenceStore.saveArtifact(
+        input.job.case_id,
+        `${input.job.job_id}-verification-${String(index + 1)}.log`,
+        result.output,
+      );
+      results.push({
+        command: [command.command, ...command.args],
+        exit_code: result.exitCode,
+        output_path: outputPath,
+      });
+    }
+    return results;
   }
 
   private async inspectPatch(job: JobRecord): Promise<PatchSnapshot> {
@@ -132,27 +151,5 @@ export class IndependentVerifier {
       .map(entry => entry.slice(3))
       .filter(Boolean);
     return { changedFiles, fingerprint: hashText(`${status.output}\0${await this.patchText(job)}`) };
-  }
-
-  private async runAcceptance(input: {
-    independentTestsUnchanged: boolean;
-    job: JobRecord;
-    scenario: 'export' | 'tax';
-  }) {
-    if (!input.independentTestsUnchanged) {
-      return {
-        exitCode: 1,
-        output:
-          'Independent acceptance files changed after the patch attempt started. The scenario was not executed.\n',
-      };
-    }
-    const acceptanceScript = join(input.job.repository_path, ACCEPTANCE_SCRIPT);
-    const tsxLoader = join(input.job.repository_path, TSX_LOADER);
-    return runProcess({
-      command: process.execPath,
-      args: ['--import', tsxLoader, acceptanceScript, input.job.worktree_path, input.scenario],
-      cwd: input.job.repository_path,
-      timeoutMs: this.config.commandTimeoutMs,
-    });
   }
 }

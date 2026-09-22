@@ -3,22 +3,30 @@ import { spawn } from 'node:child_process';
 export interface ProcessResult {
   exitCode: number;
   output: string;
+  stderr: string;
+  stdout: string;
 }
 
 export function runProcess(input: {
   command: string;
   args: string[];
   cwd: string;
+  env?: Record<string, string>;
   timeoutMs: number;
 }): Promise<ProcessResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(input.command, input.args, { cwd: input.cwd, shell: false });
-    let output = '';
+    const child = spawn(input.command, input.args, {
+      cwd: input.cwd,
+      env: input.env === undefined ? process.env : { ...process.env, ...input.env },
+      shell: false,
+    });
+    let stdout = '';
+    let stderr = '';
     child.stdout.on('data', chunk => {
-      output += String(chunk);
+      stdout += String(chunk);
     });
     child.stderr.on('data', chunk => {
-      output += String(chunk);
+      stderr += String(chunk);
     });
     const timer = setTimeout(() => {
       child.kill('SIGTERM');
@@ -30,7 +38,7 @@ export function runProcess(input: {
     });
     child.once('close', code => {
       clearTimeout(timer);
-      resolve({ exitCode: code ?? 1, output });
+      resolve({ exitCode: code ?? 1, output: `${stdout}${stderr}`, stderr, stdout });
     });
   });
 }

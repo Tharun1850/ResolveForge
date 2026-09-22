@@ -1,34 +1,86 @@
 import assert from 'node:assert/strict';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 
-import { reproduceDemoIssue, reproduceLiveIssue } from '../src/reproduction.js';
-import { CaseIdSchema } from '../src/types.js';
+import { DiagnosticRunner } from '../src/reproduction.js';
+import { TargetConfigSchema } from '../src/target-config.js';
+import { CaseIdSchema, type RouteEvidence } from '../src/types.js';
 
 const caseId = CaseIdSchema.parse('case_20260919210000000_1');
 
-test('demo reproduction records the selected routes as observed evidence', () => {
-  const evidence = reproduceDemoIssue({
-    caseId,
-    issue: 'Invoice CSV export ignores the unpaid filter.',
-    routes: ['react_ui', 'backend_api'],
-  });
+function evidence(route: RouteEvidence['route']): RouteEvidence {
+  return {
+    route,
+    status: 'reproduced',
+    expected_behavior: 'The response contains the current value.',
+    actual_behavior: 'The response contains a stale value.',
+    steps: ['Request the endpoint.'],
+    assertions: [{ name: 'current value', passed: false, detail: 'Received a stale value.' }],
+    artifacts: [],
+    diagnostics: { source: 'target-adapter' },
+  };
+}
 
-  assert.deepEqual(
-    evidence.routes.map(route => [route.route, route.status]),
-    [
-      ['react_ui', 'reproduced'],
-      ['backend_api', 'reproduced'],
-    ],
-  );
+function targetConfig(diagnostics: Record<string, unknown>) {
+  return TargetConfigSchema.parse({
+    allowed_paths: ['src'],
+    diagnostics,
+    verification: {
+      commands: [{ command: process.execPath, args: ['-e', 'process.exit(0)'] }],
+      protected_paths: ['test'],
+    },
+  });
+}
+
+test('missing adapters return not_reproduced evidence', async () => {
+  const repository = await mkdtemp(join(tmpdir(), 'resolveforge-reproduction-'));
+  const runner = new DiagnosticRunner(targetConfig({}), 5_000);
+  const result = await runner.run({
+    caseId,
+    issue: 'stale API value',
+    route: 'backend_api',
+    workingDirectory: repository,
+  });
+  assert.equal(result.status, 'not_reproduced');
+  assert.equal(result.assertions.length, 0);
 });
 
-test('live reproduction does not manufacture evidence without an adapter', () => {
-  const evidence = reproduceLiveIssue({
+test('malformed adapter output cannot become evidence', async () => {
+  const repository = await mkdtemp(join(tmpdir(), 'resolveforge-reproduction-'));
+  const runner = new DiagnosticRunner(
+    targetConfig({ backend_api: { command: process.execPath, args: ['-e', "process.stdout.write('invalid')"] } }),
+    5_000,
+  );
+  const result = await runner.run({
     caseId,
-    issue: 'Invoice CSV export ignores the unpaid filter.',
-    routes: ['backend_api'],
+    issue: 'stale API value',
+    route: 'backend_api',
+    workingDirectory: repository,
   });
+  assert.equal(result.status, 'not_reproduced');
+  assert.match(result.actual_behavior, /valid JSON/);
+});
 
-  assert.equal(evidence.routes[0]?.status, 'not_reproduced');
-  assert.equal(evidence.routes[0]?.assertions.length, 0);
+test('valid adapters return evidence and collect configured React Scan artifacts', async () => {
+  const repository = await mkdtemp(join(tmpdir(), 'resolveforge-reproduction-'));
+  const routeEvidence = evidence('react_ui');
+  const script = [
+    "require('node:fs').writeFileSync('.react-scan.json', '{}')",
+    `process.stdout.write(${JSON.stringify(JSON.stringify(routeEvidence))})`,
+  ].join(';');
+  const runner = new DiagnosticRunner(
+    targetConfig({
+      react_ui: {
+        command: process.execPath,
+        args: ['-e', script],
+        react_scan_artifacts: ['.react-scan.json'],
+      },
+    }),
+    5_000,
+  );
+  const result = await runner.run({ caseId, issue: 'slow render', route: 'react_ui', workingDirectory: repository });
+  assert.equal(result.status, 'reproduced');
+  assert.deepEqual(result.artifacts, [{ kind: 'react_scan', path: '.react-scan.json' }]);
 });

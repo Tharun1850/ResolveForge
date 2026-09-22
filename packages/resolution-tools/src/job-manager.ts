@@ -1,10 +1,9 @@
-import { join } from 'node:path';
-
 import type { ResolveForgeConfig } from './config.js';
 import { EvidenceStore } from './evidence-store.js';
 import type { FixClient, FixRun } from './fix-client.js';
-import { ACCEPTANCE_DIRECTORY, hashDirectory } from './integrity.js';
+import { hashPaths } from './integrity.js';
 import { mayStartPatchAttempt } from './policy.js';
+import type { TargetConfig } from './target-config.js';
 import { makeJobId, type CaseId, type EvidenceBundle, type JobId, type JobRecord } from './types.js';
 import { createWorktree } from './worktree.js';
 
@@ -16,6 +15,7 @@ export class JobManager {
 
   constructor(
     private readonly config: ResolveForgeConfig,
+    private readonly targetConfig: TargetConfig,
     private readonly evidenceStore: EvidenceStore,
     private readonly fixClient: FixClient,
   ) {}
@@ -37,7 +37,6 @@ export class JobManager {
     evidence: EvidenceBundle;
     issue: string;
     repositoryPath: string;
-    allowedScope: string;
   }): Promise<JobRecord> {
     const reservedAttempts = this.pendingAttempts.get(input.caseId) ?? 0;
     if (
@@ -68,7 +67,6 @@ export class JobManager {
     evidence: EvidenceBundle;
     issue: string;
     repositoryPath: string;
-    allowedScope: string;
   }): Promise<JobRecord> {
     this.ordinal += 1;
     const jobId = makeJobId(new Date(), this.ordinal);
@@ -79,8 +77,8 @@ export class JobManager {
       timeoutMs: this.config.commandTimeoutMs,
     });
     const [protectedTestsHash, independentTestsHash] = await Promise.all([
-      hashDirectory(join(worktreePath, ACCEPTANCE_DIRECTORY)),
-      hashDirectory(join(input.repositoryPath, ACCEPTANCE_DIRECTORY)),
+      hashPaths(worktreePath, this.targetConfig.verification.protected_paths),
+      hashPaths(input.repositoryPath, this.targetConfig.verification.protected_paths),
     ]);
     const job: JobRecord = {
       job_id: jobId,
@@ -88,7 +86,7 @@ export class JobManager {
       issue: input.issue,
       repository_path: input.repositoryPath,
       worktree_path: worktreePath,
-      allowed_scope: input.allowedScope,
+      allowed_scopes: this.targetConfig.allowed_paths,
       protected_tests_hash: protectedTestsHash,
       independent_tests_hash: independentTestsHash,
       patch_attempt: this.all().filter(existing => existing.case_id === input.caseId).length + 1,
@@ -96,10 +94,12 @@ export class JobManager {
       events: [],
     };
     this.jobs.set(jobId, job);
-    const evidencePath = await this.evidenceStore.saveEvidence(input.evidence);
+    await this.evidenceStore.saveEvidence(input.evidence);
     const run = await this.fixClient.start({
-      evidencePath,
+      allowedPaths: this.targetConfig.allowed_paths,
+      evidence: input.evidence,
       issue: input.issue,
+      validationCommands: this.targetConfig.verification.commands,
       workingDir: worktreePath,
       recordEvent: event => {
         this.appendEvent(jobId, event);

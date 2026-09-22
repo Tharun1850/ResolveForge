@@ -33,20 +33,16 @@ export async function createWorktree(input: {
   return worktreePath;
 }
 
-export function isAllowedChange(input: { allowedScope: string; changedFile: string }): boolean {
-  const scope = posix.normalize(input.allowedScope.replaceAll('\\', '/'));
+export function isAllowedChange(input: { allowedScopes: string[]; changedFile: string }): boolean {
   const file = posix.normalize(input.changedFile.replaceAll('\\', '/'));
-  if (
-    scope === '.' ||
-    file === '.' ||
-    posix.isAbsolute(scope) ||
-    posix.isAbsolute(file) ||
-    scope === '..' ||
-    file === '..' ||
-    scope.startsWith('../') ||
-    file.startsWith('../')
-  ) {
+  if (file === '.' || posix.isAbsolute(file) || file === '..' || file.startsWith('../')) {
     return false;
   }
-  return file === scope || file.startsWith(`${scope}/`);
+  return input.allowedScopes.some(allowedScope => {
+    const scope = posix.normalize(allowedScope.replaceAll('\\', '/'));
+    if (scope === '.' || scope === '..' || posix.isAbsolute(scope) || scope.startsWith('../')) {
+      return false;
+    }
+    return file === scope || file.startsWith(`${scope}/`);
+  });
 }

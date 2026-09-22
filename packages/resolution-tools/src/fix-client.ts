@@ -1,7 +1,7 @@
-import { readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
-
 import { JcodeClient } from '@1jehuang/jcode-sdk';
+
+import type { Command } from './target-config.js';
+import type { EvidenceBundle } from './types.js';
 
 export interface FixRun {
   cancel(): Promise<void>;
@@ -10,30 +10,46 @@ export interface FixRun {
 
 export interface FixClient {
   start(input: {
-    evidencePath: string;
+    allowedPaths: string[];
+    evidence: EvidenceBundle;
     issue: string;
-    workingDir: string;
     recordEvent: (event: string) => void;
+    validationCommands: Command[];
+    workingDir: string;
   }): Promise<FixRun>;
+}
+
+export function buildFixPrompt(input: {
+  allowedPaths: string[];
+  evidence: EvidenceBundle;
+  issue: string;
+  validationCommands: Command[];
+}): string {
+  return [
+    'Resolve the reported issue using the supplied evidence.',
+    `Issue: ${input.issue}`,
+    `Evidence: ${JSON.stringify(input.evidence)}`,
+    `Edit only these repository-relative paths: ${input.allowedPaths.join(', ')}.`,
+    `Use these validation commands when relevant: ${input.validationCommands
+      .map(command => [command.command, ...command.args].join(' '))
+      .join('; ')}.`,
+    'Do not edit protected tests, commit, push, create a pull request, access parent paths, or use the network.',
+    'Run only focused local validation commands. Return a concise summary of the code change and remaining assumptions.',
+  ].join('\n');
 }
 
 export class JcodeFixClient implements FixClient {
   async start(input: {
-    evidencePath: string;
+    allowedPaths: string[];
+    evidence: EvidenceBundle;
     issue: string;
-    workingDir: string;
     recordEvent: (event: string) => void;
+    validationCommands: Command[];
+    workingDir: string;
   }): Promise<FixRun> {
     const client = await JcodeClient.launch({ inheritLogins: true, workingDir: input.workingDir });
     const session = await client.createSession(input.workingDir);
-    const prompt = [
-      'Resolve the reported issue using the saved evidence.',
-      `Issue: ${input.issue}`,
-      `Evidence: ${input.evidencePath}`,
-      'Edit only files under packages/resolveforge-demo/src.',
-      'Do not edit tests, commit, push, create a pull request, access parent paths, or use the network.',
-      'Run only focused local validation commands. Return a concise summary of the code change and remaining assumptions.',
-    ].join('\n');
+    const prompt = buildFixPrompt(input);
     let deniedPermission: string | null = null;
     const completion = client
       .run(session.session_id, prompt, {
@@ -65,69 +81,5 @@ export class JcodeFixClient implements FixClient {
       },
       completion,
     };
-  }
-}
-
-async function replaceRequired(input: { path: string; from: string; to: string }): Promise<void> {
-  const content = await readFile(input.path, 'utf8');
-  if (!content.includes(input.from)) {
-    throw new Error(`The expected seeded defect is missing from ${input.path}.`);
-  }
-  await writeFile(input.path, content.replace(input.from, input.to), 'utf8');
-}
-
-export class DemoFixClient implements FixClient {
-  start(input: {
-    evidencePath: string;
-    issue: string;
-    workingDir: string;
-    recordEvent: (event: string) => void;
-  }): Promise<FixRun> {
-    const completion = (async () => {
-      input.recordEvent('demo worker started');
-      const modelPath = join(input.workingDir, 'packages/resolveforge-demo/src/invoice-model.ts');
-      const issue = input.issue.toLowerCase();
-      if (issue.includes('discount') || issue.includes('tax')) {
-        await replaceRequired({
-          path: modelPath,
-          from: 'return subtotal * (1 + taxRate) - discount;',
-          to: 'return (subtotal - discount) * (1 + taxRate);',
-        });
-      } else {
-        await replaceRequired({
-          path: modelPath,
-          from: [
-            'export function exportInvoices(status: InvoiceStatus | null): Invoice[] {',
-            '  // Seeded defect. The export ignores an active filter until ResolveForge fixes it.',
-            '  void status;',
-            '  return invoices;',
-            '}',
-          ].join('\n'),
-          to: [
-            'export function exportInvoices(status: InvoiceStatus | null): Invoice[] {',
-            '  return status ? invoices.filter(invoice => invoice.status === status) : invoices;',
-            '}',
-          ].join('\n'),
-        });
-        await replaceRequired({
-          path: modelPath,
-          from: [
-            'export function displayedInvoices(visibleInvoices: Invoice[]): Invoice[] {',
-            '  // Seeded defect. The table renders every invoice after the status filter changes.',
-            '  void visibleInvoices;',
-            '  return invoices;',
-            '}',
-          ].join('\n'),
-          to: [
-            'export function displayedInvoices(visibleInvoices: Invoice[]): Invoice[] {',
-            '  return visibleInvoices;',
-            '}',
-          ].join('\n'),
-        });
-      }
-      input.recordEvent(`demo worker used ${input.evidencePath}`);
-      return 'Demo patch applied to the seeded invoice defect.';
-    })();
-    return Promise.resolve({ cancel: () => Promise.resolve(), completion });
   }
 }

@@ -1,9 +1,6 @@
 import { createHash } from 'node:crypto';
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import { join, relative } from 'node:path';
-
-export const ACCEPTANCE_DIRECTORY = join('packages', 'resolution-tools', 'test', 'acceptance');
-export const ACCEPTANCE_SCRIPT = join(ACCEPTANCE_DIRECTORY, 'invoice.acceptance.ts');
 
 async function filesBelow(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -19,6 +16,11 @@ async function filesBelow(directory: string): Promise<string[]> {
   return nested.flat().sort();
 }
 
+async function filesAt(path: string): Promise<string[]> {
+  const metadata = await stat(path);
+  return metadata.isDirectory() ? filesBelow(path) : [path];
+}
+
 export async function hashDirectory(directory: string): Promise<string> {
   const hash = createHash('sha256');
   for (const path of await filesBelow(directory)) {
@@ -26,6 +28,20 @@ export async function hashDirectory(directory: string): Promise<string> {
     hash.update('\0');
     hash.update(await readFile(path));
     hash.update('\0');
+  }
+  return hash.digest('hex');
+}
+
+export async function hashPaths(root: string, paths: string[]): Promise<string> {
+  const hash = createHash('sha256');
+  for (const configuredPath of [...paths].sort()) {
+    const absolutePath = join(root, configuredPath);
+    for (const path of await filesAt(absolutePath)) {
+      hash.update(relative(root, path));
+      hash.update('\0');
+      hash.update(await readFile(path));
+      hash.update('\0');
+    }
   }
   return hash.digest('hex');
 }
